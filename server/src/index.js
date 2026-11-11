@@ -17,6 +17,7 @@ import queueRoutes from './routes/queue.js';
 import teamRoutes from './routes/team.js';
 import chatRoutes from './routes/chat.js';
 import canvasRoutes from './routes/canvases.js';
+import geminiRoutes from './routes/gemini.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -61,6 +62,7 @@ app.use('/api', forumRoutes);
 app.use('/api', queueRoutes);
 app.use('/api', teamRoutes);
 app.use('/api', chatRoutes);
+app.use('/api', geminiRoutes);
 app.use('/api/canvases', canvasRoutes);
 app.use('/api', genRoutes);
 

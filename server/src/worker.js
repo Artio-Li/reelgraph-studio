@@ -1,5 +1,6 @@
 import { pendingJobs, updateJob, addCredits, getJob, db, createJob, priceOf } from './db.js';
 import { getVideo, getImageTask, downloadMedia, createVideo, MuseError } from './muse.js';
+import { applyRealism, realismEnabled } from './realism.js';
 
 const TICK_MS = 3000;
 const VIDEO_TIMEOUT_MS = 15 * 60 * 1000;   // 15 分钟
@@ -112,8 +113,9 @@ async function tickQueue() {
   for (const q of due) {
     let params = {};
     try { params = JSON.parse(q.params || '{}'); } catch { params = {}; }
+    const effectiveParams = { ...params, realism: realismEnabled() };
 
-    const cost = priceOf('video', params);
+    const cost = priceOf('video', effectiveParams);
     const u = db.prepare('SELECT credits FROM users WHERE id = ?').get(q.user_id);
     if (!u || u.credits < cost) {
       db.prepare("UPDATE queue_items SET status = 'paused', note = ? WHERE id = ?")
@@ -121,12 +123,12 @@ async function tickQueue() {
       continue;
     }
 
-    const job = createJob(q.user_id, 'video', q.prompt, params, cost);
+    const job = createJob(q.user_id, 'video', q.prompt, effectiveParams, cost);
     addCredits(q.user_id, -cost, '队列任务执行', job.id);
 
     try {
       const payload = {
-        prompt: q.prompt,
+        prompt: applyRealism(q.prompt, 'video'),
         model: 'muse-video',
         duration: Number(params.duration) || 5,
         size: params.size || '16:9',

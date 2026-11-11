@@ -8,6 +8,8 @@ import {
   db, uid, now, createJob, getJob, updateJob, listJobs, addCredits, priceOf, getSettings,
 } from '../db.js';
 import * as muse from '../muse.js';
+import * as gemini from '../gemini.js';
+import { applyRealism, realismEnabled } from '../realism.js';
 
 const r = Router();
 
@@ -85,7 +87,10 @@ r.post('/videos', requireAuth, async (req, res) => {
     return res.status(400).json({ error: '请填写画面描述' });
   }
   const dur = CFG.videoDurations.includes(Number(duration)) ? Number(duration) : 5;
-  const params = { duration: dur, size: CFG.sizes.includes(size) ? size : '16:9', images, extra };
+  const params = {
+    duration: dur, size: CFG.sizes.includes(size) ? size : '16:9', images, extra,
+    realism: realismEnabled(),
+  };
   const cost = priceOf('video', params);
 
   const fresh = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
@@ -99,7 +104,7 @@ r.post('/videos', requireAuth, async (req, res) => {
   try {
     const refs = normalizeRefs(images);
     const payload = {
-      prompt: String(prompt).trim(),
+      prompt: applyRealism(prompt, 'video'),
       model,
       duration: dur,
       size: params.size,
@@ -122,11 +127,17 @@ r.post('/videos', requireAuth, async (req, res) => {
 
 /* ------------------------------ 图片 ------------------------------ */
 r.post('/images', requireAuth, async (req, res) => {
-  const { prompt, size = '1:1', images = [] } = req.body || {};
+  const {
+    prompt, size = '1:1', images = [], provider = 'muse', model = null, resolution = '1K',
+  } = req.body || {};
   if (!prompt || String(prompt).trim().length < 2) {
     return res.status(400).json({ error: '请填写提示词' });
   }
-  const params = { size: CFG.sizes.includes(size) ? size : '1:1', images };
+  const params = {
+    size: CFG.sizes.includes(size) ? size : '1:1', images,
+    provider: provider === 'gemini' ? 'gemini' : 'muse', model, resolution,
+    realism: realismEnabled(),
+  };
   const cost = priceOf('image', params);
 
   const fresh = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
@@ -139,7 +150,21 @@ r.post('/images', requireAuth, async (req, res) => {
 
   try {
     const refs = normalizeRefs(images);
-    const payload = { prompt: String(prompt).trim(), model: 'muse-image', size: params.size };
+    if (params.provider === 'gemini') {
+      const out = await gemini.generateImage({
+        prompt: applyRealism(prompt, 'image'), model, size: params.size, resolution, images: refs, jobId: job.id,
+      });
+      updateJob(job.id, {
+        status: 'completed', progress: 100, media_file: out.fileName,
+        result: JSON.stringify({
+          url: out.url, localUrl: out.url, bytes: out.bytes, mime: out.mime,
+          model: out.model, note: out.note, usage: out.usage,
+        }),
+        finished_at: Date.now(),
+      });
+      return res.json({ job: getJob(job.id) });
+    }
+    const payload = { prompt: applyRealism(prompt, 'image'), model: 'muse-image', size: params.size };
     if (refs.length) payload.images = refs;
 
     const out = await muse.createImageTask(payload);
@@ -197,6 +222,7 @@ r.get('/meta', requireAuth, (_req, res) => {
   res.json({
     siteName: s.siteName,
     notice: s.notice,
+    realismEnabled: s.realismEnabled === '1',
     durations: CFG.videoDurations,
     sizes: CFG.sizes,
     price: {

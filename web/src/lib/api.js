@@ -57,6 +57,8 @@ export const api = {
 
   createVideo: (b) => request('/api/videos', { method: 'POST', body: b }),
   createImage: (b) => request('/api/images', { method: 'POST', body: b }),
+  geminiMeta: () => request('/api/gemini/meta'),
+  generatePrompt: (b) => request('/api/gemini/prompts', { method: 'POST', body: b }),
   canvases: () => request('/api/canvases'),
   createCanvas: (b) => request('/api/canvases', { method: 'POST', body: b }),
   canvas: (id) => request(`/api/canvases/${encodeURIComponent(id)}`),
@@ -84,6 +86,7 @@ export const api = {
   adminPatchUser: (id, b) => request(`/api/admin/users/${id}`, { method: 'PATCH', body: b }),
   adminSettings: () => request('/api/admin/settings'),
   adminSaveSettings: (b) => request('/api/admin/settings', { method: 'PATCH', body: b }),
+  adminTestGemini: () => request('/api/admin/gemini/test', { method: 'POST' }),
   adminSystem: () => request('/api/admin/system'),
   adminKeepalive: () => request('/api/admin/keepalive', { method: 'POST' }),
   adminOrders: (kind) => request(`/api/admin/orders${kind ? `?kind=${kind}` : ''}`),

@@ -2,7 +2,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import {
   Sparkles, Workflow, KeyRound, LogOut, Search, Sun, Moon, ChevronLeft, ChevronRight,
-  Zap, UserRound, AlertTriangle,
+  Zap, UserRound, AlertTriangle, Bot, Settings2,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useAuth } from '../store/auth.jsx';
@@ -10,6 +10,7 @@ import { api } from '../lib/api.js';
 
 const NAV = [
   { to: '/create', label: '快捷创作', icon: Sparkles },
+  { to: '/gemini', label: 'Gemini 创作', icon: Bot },
   { to: '/canvas', label: '无限画布', icon: Workflow },
   { to: '/accounts', label: 'muse 导入', icon: KeyRound },
 ];
@@ -64,7 +65,7 @@ export default function Layout() {
         {!collapsed && <p className="px-5 pb-2 pt-3 eyebrow">Workspace</p>}
 
         <nav className={clsx('flex flex-col gap-0.5', collapsed ? 'px-2 pt-3' : 'px-3')}>
-          {NAV.map((item) => (
+          {[...NAV, ...(user?.role === 'admin' ? [{ to: '/admin', label: '管理员', icon: Settings2 }] : [])].map((item) => (
             <NavItem key={item.to} {...item} collapsed={collapsed} />
           ))}
         </nav>

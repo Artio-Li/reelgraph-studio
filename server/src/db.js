@@ -240,6 +240,10 @@ const DEFAULT_SETTINGS = {
   priceImage: String(CFG.price.image),
   allowRegister: CFG.allowRegister ? '1' : '0',
   notice: '',
+  realismEnabled: '1',
+  geminiEnabled: '0',
+  geminiTextModel: 'gemini-2.5-flash',
+  geminiImageModel: 'gemini-3.1-flash-image',
 };
 
 export function getSettings() {
@@ -257,6 +261,37 @@ export function setSetting(key, value) {
 
 export function getSetting(key) {
   return getSettings()[key] ?? DEFAULT_SETTINGS[key];
+}
+
+/* --------------------------- encrypted settings --------------------------- */
+const SECRET_PREFIX = 'enc:v1:';
+const secretKey = crypto.createHash('sha256').update(String(CFG.jwtSecret)).digest();
+
+export function setSecretSetting(key, value) {
+  const plain = String(value || '').trim();
+  if (!plain) {
+    db.prepare('DELETE FROM settings WHERE key = ?').run(key);
+    return;
+  }
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', secretKey, iv);
+  const encrypted = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  setSetting(key, `${SECRET_PREFIX}${iv.toString('base64')}:${tag.toString('base64')}:${encrypted.toString('base64')}`);
+}
+
+export function getSecretSetting(key) {
+  const stored = db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value || '';
+  if (!stored) return '';
+  if (!stored.startsWith(SECRET_PREFIX)) return stored; // 兼容升级前的明文配置
+  try {
+    const [ivB64, tagB64, dataB64] = stored.slice(SECRET_PREFIX.length).split(':');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', secretKey, Buffer.from(ivB64, 'base64'));
+    decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
+    return Buffer.concat([decipher.update(Buffer.from(dataB64, 'base64')), decipher.final()]).toString('utf8');
+  } catch {
+    throw new Error('Gemini API Key 无法解密，请管理员重新保存');
+  }
 }
 
 /* -------------------------------- ledger -------------------------------- */

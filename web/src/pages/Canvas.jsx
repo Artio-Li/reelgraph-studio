@@ -6,7 +6,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import {
   Box, Film, Image as ImageIcon, LayoutGrid, Loader2, Play, Plus, RefreshCw,
-  Save, Sparkles, Trash2, Type, Upload, X,
+  Save, Sparkles, Trash2, Type, Upload, X, Bot, Wand2,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { api } from '../lib/api.js';
@@ -14,12 +14,19 @@ import { useAuth } from '../store/auth.jsx';
 import { useToast } from '../components/ui.jsx';
 
 const LEGACY_KEY = 'xm_canvas_v1';
+const IMPORT_KEY = 'reelgraph_canvas_import';
 const ACTIVE = new Set(['queued', 'submitting', 'processing']);
 const LINK_RULES = new Set([
   'text:text>video:prompt',
   'image:image>video:ref',
+  'geminiImage:image>video:ref',
   'character:images>video:ref',
   'image:image>character:image',
+  'geminiImage:image>character:image',
+  'text:text>geminiImage:prompt',
+  'geminiPrompt:text>geminiImage:prompt',
+  'geminiPrompt:text>video:prompt',
+  'image:image>geminiImage:ref',
   'video:video>storyboard:clip',
 ]);
 
@@ -121,6 +128,33 @@ function ImageNode({ data }) {
   );
 }
 
+function GeminiPromptNode({ data }) {
+  return (
+    <Card tone="violet">
+      <Header icon={Wand2} title={nodeTitle(data, 'Gemini 提示词')} tag="GEMINI · TEXT" />
+      <p className="nodrag line-clamp-5 min-h-20 whitespace-pre-wrap px-3 py-2.5 text-[10px] leading-relaxed text-mist-300">
+        {data.content || data.keywords || '在右侧输入关键词并生成'}
+      </p>
+      <Handle type="source" id="text" position={Position.Right} className="!h-2.5 !w-2.5 !border-violet-300 !bg-violet-500" />
+    </Card>
+  );
+}
+
+function GeminiImageNode({ data }) {
+  return (
+    <Card tone="sky">
+      <Header icon={Bot} title={nodeTitle(data, 'Gemini 人物图')} tag="GEMINI · IMAGE" />
+      {data.url
+        ? <img src={data.url} alt="Gemini 人物图" className="nodrag h-36 w-full object-cover" />
+        : <div className="grid h-28 place-items-center px-3 text-center text-[10px] text-mist-400">连接提示词和参考图后，在右侧点击生成</div>}
+      <div className="px-3 py-2 font-mono text-[9px] text-mist-400">{data.size || '9:16'} · {data.resolution || '1K'}</div>
+      <Handle type="target" id="prompt" position={Position.Left} style={{ top: '34%' }} className="!h-2.5 !w-2.5 !border-violet-300 !bg-violet-500" />
+      <Handle type="target" id="ref" position={Position.Left} style={{ top: '70%' }} className="!h-2.5 !w-2.5 !border-sky-300 !bg-sky-500" />
+      <Handle type="source" id="image" position={Position.Right} className="!h-2.5 !w-2.5 !border-sky-300 !bg-sky-500" />
+    </Card>
+  );
+}
+
 function CharacterNode({ data }) {
   return (
     <Card tone="violet">
@@ -170,9 +204,12 @@ function StoryboardNode({ data }) {
   );
 }
 
-const nodeTypes = { text: TextNode, image: ImageNode, character: CharacterNode, video: VideoNode, storyboard: StoryboardNode };
+const nodeTypes = {
+  text: TextNode, image: ImageNode, geminiPrompt: GeminiPromptNode, geminiImage: GeminiImageNode,
+  character: CharacterNode, video: VideoNode, storyboard: StoryboardNode,
+};
 
-function Inspector({ node, updateNode, removeNode, uploadBusy, onUpload, onRun, runBusy }) {
+function Inspector({ node, updateNode, removeNode, uploadBusy, onUpload, onRun, runBusy, onRunAi, aiBusy, geminiMeta }) {
   if (!node) {
     return (
       <div className="px-4 py-6 text-[12px] leading-relaxed text-mist-400">
@@ -204,6 +241,44 @@ function Inspector({ node, updateNode, removeNode, uploadBusy, onUpload, onRun, 
             <input type="file" accept="image/*" className="hidden" disabled={uploadBusy} onChange={(e) => onUpload(node.id, e.target.files?.[0])} />
           </label>
         </div>
+      )}
+      {node.type === 'geminiPrompt' && (
+        <>
+          <label className="block text-[11px] text-mist-300">关键词 / 需求
+            <textarea value={data.keywords || ''} onChange={(e) => patch({ keywords: e.target.value })} rows={6} className="mt-1.5 w-full resize-y rounded-lg border border-ink-600 bg-ink-900 px-3 py-2 text-[12px] leading-relaxed outline-none focus:border-brand-500" placeholder="人物、场景、动作、风格…" />
+          </label>
+          <label className="block text-[11px] text-mist-300">参考模板（可选）
+            <textarea value={data.template || ''} onChange={(e) => patch({ template: e.target.value })} rows={5} className="mt-1.5 w-full resize-y rounded-lg border border-ink-600 bg-ink-900 px-3 py-2 text-[12px] leading-relaxed outline-none focus:border-brand-500" />
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-[11px] text-mist-300">时长
+              <select value={data.duration || 10} onChange={(e) => patch({ duration: Number(e.target.value) })} className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-2 text-[12px]">{[5, 8, 10, 15].map((n) => <option key={n} value={n}>{n} 秒</option>)}</select>
+            </label>
+            <label className="text-[11px] text-mist-300">比例
+              <select value={data.size || '9:16'} onChange={(e) => patch({ size: e.target.value })} className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-2 text-[12px]">{['9:16', '16:9', '1:1', '3:4', '4:3'].map((s) => <option key={s}>{s}</option>)}</select>
+            </label>
+          </div>
+          <label className="block text-[11px] text-mist-300">文本模型
+            <select value={data.model || geminiMeta?.defaults?.text || ''} onChange={(e) => patch({ model: e.target.value })} className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-2 text-[12px]">{(geminiMeta?.models?.text || []).map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}</select>
+          </label>
+          {data.content && <label className="block text-[11px] text-mist-300">生成结果<textarea value={data.content} onChange={(e) => patch({ content: e.target.value })} rows={10} className="mt-1.5 w-full resize-y rounded-lg border border-ink-600 bg-ink-900 px-3 py-2 text-[12px] leading-relaxed outline-none focus:border-brand-500" /></label>}
+          <button onClick={() => onRunAi(node)} disabled={aiBusy || !geminiMeta?.enabled} className="flex w-full items-center justify-center gap-2 rounded-lg brand-gradient px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">{aiBusy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />} 生成提示词</button>
+        </>
+      )}
+      {node.type === 'geminiImage' && (
+        <>
+          <label className="block text-[11px] text-mist-300">节点内补充描述（可选）
+            <textarea value={data.prompt || ''} onChange={(e) => patch({ prompt: e.target.value })} rows={5} className="mt-1.5 w-full resize-y rounded-lg border border-ink-600 bg-ink-900 px-3 py-2 text-[12px] leading-relaxed outline-none focus:border-brand-500" placeholder="可连接文本节点，也可以在这里补充" />
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-[11px] text-mist-300">比例<select value={data.size || '9:16'} onChange={(e) => patch({ size: e.target.value })} className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-2 text-[12px]">{['9:16', '16:9', '1:1', '3:4', '4:3'].map((s) => <option key={s}>{s}</option>)}</select></label>
+            <label className="text-[11px] text-mist-300">清晰度<select value={data.resolution || '1K'} onChange={(e) => patch({ resolution: e.target.value })} className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-2 text-[12px]">{['1K', '2K', '4K'].map((s) => <option key={s}>{s}</option>)}</select></label>
+          </div>
+          <label className="block text-[11px] text-mist-300">图片模型<select value={data.model || geminiMeta?.defaults?.image || ''} onChange={(e) => patch({ model: e.target.value })} className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-2 text-[12px]">{(geminiMeta?.models?.image || []).map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}</select></label>
+          {data.url && <img src={data.url} alt="生成结果" className="max-h-52 w-full rounded-lg bg-black/30 object-contain" />}
+          <button onClick={() => onRunAi(node)} disabled={aiBusy || !geminiMeta?.enabled} className="flex w-full items-center justify-center gap-2 rounded-lg brand-gradient px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">{aiBusy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />} 生成人物图</button>
+          <p className="text-[10px] leading-relaxed text-mist-400">将文本连到上方端口、参考图连到下方端口。生成结果可继续连接“角色参考”或“视频生成”。</p>
+        </>
       )}
       {node.type === 'video' && (
         <>
@@ -251,6 +326,8 @@ export default function Canvas() {
   const [saving, setSaving] = useState(false);
   const [runBusy, setRunBusy] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [geminiMeta, setGeminiMeta] = useState(null);
   const flowRef = useRef(null);
   const revRef = useRef(1);
   const lastSavedRef = useRef('');
@@ -357,6 +434,26 @@ export default function Canvas() {
     return () => { cancelled = true; };
   }, [openCanvas, toast]);
 
+  useEffect(() => {
+    api.geminiMeta().then(setGeminiMeta).catch(() => setGeminiMeta({ enabled: false, models: { text: [], image: [] }, defaults: {} }));
+  }, []);
+
+  useEffect(() => {
+    if (!canvas?.id || loading) return;
+    try {
+      const imported = JSON.parse(localStorage.getItem(IMPORT_KEY) || 'null');
+      if (!imported?.url) return;
+      localStorage.removeItem(IMPORT_KEY);
+      const node = {
+        id: newId(), type: 'geminiImage', position: { x: 280, y: 180 },
+        data: { label: 'Gemini 人物图', url: imported.url, prompt: imported.prompt || '', size: '9:16', resolution: '1K', model: geminiMeta?.defaults?.image || '' },
+      };
+      setNodes((current) => [...current, node]);
+      setSelectedIds([node.id]);
+      toast('人物图已放入当前画布', 'ok');
+    } catch { localStorage.removeItem(IMPORT_KEY); }
+  }, [canvas?.id, loading, geminiMeta?.defaults?.image, setNodes, toast]);
+
   latestRef.current = {
     nodes, edges, name,
     viewport,
@@ -422,6 +519,8 @@ export default function Canvas() {
     const defaults = {
       text: { label: '文本提示词', content: '' },
       image: { label: '参考图片', url: '' },
+      geminiPrompt: { label: 'Gemini 提示词', keywords: '', template: '', content: '', duration: 10, size: '9:16', model: geminiMeta?.defaults?.text || '' },
+      geminiImage: { label: 'Gemini 人物图', prompt: '', url: '', size: '9:16', resolution: '1K', model: geminiMeta?.defaults?.image || '' },
       character: { label: '角色参考' },
       video: { label: '视频生成', prompt: '', duration: 5, size: '16:9' },
       storyboard: { label: '分镜板' },
@@ -451,6 +550,52 @@ export default function Canvas() {
       toast(error.message, 'error');
     } finally {
       setUploadBusy(false);
+    }
+  };
+
+  const runAiNode = async (node) => {
+    if (!geminiMeta?.enabled) return toast('请管理员先配置并启用 Gemini', 'error');
+    setAiBusy(true);
+    try {
+      if (node.type === 'geminiPrompt') {
+        const out = await api.generatePrompt({
+          keywords: node.data?.keywords,
+          template: node.data?.template,
+          duration: node.data?.duration || 10,
+          aspectRatio: node.data?.size || '9:16',
+          style: node.data?.style || '写实真人质感，真实物理光学表现',
+          model: node.data?.model || geminiMeta.defaults?.text,
+        });
+        updateNode(node.id, { content: out.content, model: out.model });
+        toast('Gemini 提示词已生成', 'ok');
+        return;
+      }
+      if (node.type === 'geminiImage') {
+        const incoming = edges.filter((edge) => edge.target === node.id);
+        const promptParts = incoming.filter((edge) => edge.targetHandle === 'prompt').map((edge) => {
+          const source = nodes.find((item) => item.id === edge.source);
+          return String(source?.data?.content || '').trim();
+        }).filter(Boolean);
+        if (String(node.data?.prompt || '').trim()) promptParts.push(String(node.data.prompt).trim());
+        const prompt = promptParts.join('\n\n').trim();
+        if (prompt.length < 2) throw new Error('请连接提示词节点，或填写节点内补充描述');
+        const images = incoming.filter((edge) => edge.targetHandle === 'ref').map((edge) => {
+          const source = nodes.find((item) => item.id === edge.source);
+          return source?.data?.url;
+        }).filter(Boolean);
+        if (!window.confirm(`将调用 Gemini 生成 1 张 ${node.data?.resolution || '1K'} 人物图，并扣除图片积分。继续吗？`)) return;
+        const out = await api.createImage({
+          provider: 'gemini', model: node.data?.model || geminiMeta.defaults?.image,
+          prompt, images, size: node.data?.size || '9:16', resolution: node.data?.resolution || '1K',
+        });
+        updateNode(node.id, { url: out.job?.mediaUrl, jobId: out.job?.id, prompt, model: out.job?.params?.model || node.data?.model });
+        refresh();
+        toast('Gemini 人物图已生成', 'ok');
+      }
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      setAiBusy(false);
     }
   };
 
@@ -530,6 +675,9 @@ export default function Canvas() {
         <button onClick={createCanvas} className="flex items-center gap-1.5 rounded-lg border border-ink-600 px-3 py-2 text-[11px] text-mist-300 hover:text-white"><Plus size={12} /> 新画布</button>
         <button onClick={deleteCurrent} className="grid h-8 w-8 place-items-center rounded-lg border border-rose-500/25 text-rose-300 hover:bg-rose-500/10"><Trash2 size={13} /></button>
         <span className="flex items-center gap-1 text-[10px] text-mist-400">{saving ? <Loader2 size={11} className="animate-spin" /> : <Save size={11} />}{saving ? '保存中' : '已自动保存'}</span>
+        {geminiMeta?.realismEnabled && (
+          <span className="rounded-full border border-brand-500/25 bg-brand-500/10 px-2 py-1 text-[10px] text-brand-300">真实拍摄模式</span>
+        )}
         <div className="ml-auto flex items-center gap-2">
           <button onClick={() => run([], true)} disabled={runBusy || ACTIVE.has(latestRun?.status)} title="忽略历史缓存，重新生成新的变体" className="flex items-center gap-1.5 rounded-lg border border-ink-600 px-3 py-2 text-[11px] text-mist-300 hover:text-white disabled:opacity-40"><RefreshCw size={12} /> 强制新变体</button>
           <button onClick={() => run([], false)} disabled={runBusy || ACTIVE.has(latestRun?.status)} className="flex items-center gap-1.5 rounded-lg brand-gradient px-4 py-2 text-[12px] font-medium text-white disabled:opacity-45">
@@ -542,7 +690,8 @@ export default function Canvas() {
       <div className="flex min-h-0 flex-1">
         <aside className="z-10 flex w-14 shrink-0 flex-col items-center gap-2 border-r border-ink-700 bg-ink-850 py-3">
           {[
-            ['text', Type, '文本'], ['image', ImageIcon, '图片'], ['character', Box, '角色'],
+            ['text', Type, '文本'], ['image', ImageIcon, '图片'], ['geminiPrompt', Wand2, 'AI提示词'],
+            ['geminiImage', Bot, 'AI人物图'], ['character', Box, '角色'],
             ['video', Film, '视频'], ['storyboard', LayoutGrid, '分镜板'],
           ].map(([type, Icon, label]) => (
             <button key={type} onClick={() => addNodeOf(type)} title={`添加${label}节点`} className="grid h-9 w-9 place-items-center rounded-lg border border-ink-600 text-mist-400 hover:border-brand-500/60 hover:bg-brand-500/10 hover:text-brand-300"><Icon size={15} /></button>
@@ -590,7 +739,7 @@ export default function Canvas() {
             <span className="text-[12px] font-medium text-white">节点设置</span>
             {selectedNode && <button onClick={() => setSelectedIds([])} className="text-mist-400 hover:text-white"><X size={13} /></button>}
           </div>
-          <Inspector node={selectedNode} updateNode={updateNode} removeNode={removeNode} uploadBusy={uploadBusy} onUpload={uploadImage} onRun={run} runBusy={runBusy} />
+          <Inspector node={selectedNode} updateNode={updateNode} removeNode={removeNode} uploadBusy={uploadBusy} onUpload={uploadImage} onRun={run} runBusy={runBusy} onRunAi={runAiNode} aiBusy={aiBusy} geminiMeta={geminiMeta} />
           {latestRun && (
             <div className="mx-4 mb-4 rounded-xl border border-ink-600 bg-ink-900 p-3 text-[10px] text-mist-300">
               <div className="mb-2 flex items-center justify-between"><span>最近运行</span><span className={ACTIVE.has(latestRun.status) ? 'text-brand-300' : latestRun.status === 'failed' ? 'text-rose-300' : 'text-emerald-300'}>{latestRun.status}</span></div>

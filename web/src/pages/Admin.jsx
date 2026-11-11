@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Users, Film, CheckCircle2, XCircle, Loader2, Cpu, Wallet, Settings2,
   RefreshCw, Search, Plus, Minus, ShieldOff, ShieldCheck, Save, Zap, MessageSquare, Trash2, TrendingUp,
+  KeyRound, Sparkles,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { api, fmtAgo, fmtTime } from '../lib/api.js';
@@ -508,6 +509,8 @@ function SettingsPanel() {
   const toast = useToast();
   const [settings, setSettings] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [testingGemini, setTestingGemini] = useState(false);
+  const [geminiModels, setGeminiModels] = useState(null);
 
   useEffect(() => {
     api.adminSettings().then((r) => setSettings(r.settings)).catch((e) => toast(e.message, 'error'));
@@ -525,6 +528,21 @@ function SettingsPanel() {
       toast(e.message, 'error');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const testGemini = async () => {
+    setTestingGemini(true);
+    try {
+      const saved = await api.adminSaveSettings(settings);
+      setSettings(saved.settings);
+      const out = await api.adminTestGemini();
+      setGeminiModels(out.models);
+      toast(`连接成功：${out.counts.text} 个文本模型，${out.counts.image} 个图片模型`, 'ok');
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      setTestingGemini(false);
     }
   };
 
@@ -550,6 +568,88 @@ function SettingsPanel() {
           <Field label="注册赠送积分">
             <Input type="number" value={settings.signupCredits} onChange={set('signupCredits')} />
           </Field>
+        </div>
+      </div>
+
+      <div className="card p-5">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="flex items-center gap-2 text-[13.5px] font-semibold text-mist-200">
+              <Sparkles size={14} className="text-brand-400" /> 全局生成风格
+            </h3>
+            <p className="mt-1 text-[11.5px] leading-5 text-ink-500">
+              开启后，服务端会为提示词、图片和视频统一补充真实光线、人体结构、材质、镜头与时序约束。
+            </p>
+          </div>
+          <Badge tone={(settings.realismEnabled ?? '1') === '1' ? 'ok' : 'neutral'}>
+            {(settings.realismEnabled ?? '1') === '1' ? '已开启' : '已关闭'}
+          </Badge>
+        </div>
+        <Field label="真实拍摄 / 去 AI 感" hint="作用于 Gemini 提示词、Gemini/Muse 图片、Muse 视频、无限画布和自动队列。">
+          <Select value={settings.realismEnabled ?? '1'} onChange={set('realismEnabled')}>
+            <option value="1">开启：自动附加真实拍摄约束</option>
+            <option value="0">关闭：完全使用用户原始提示词</option>
+          </Select>
+        </Field>
+      </div>
+
+      <div className="card p-5">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="flex items-center gap-2 text-[13.5px] font-semibold text-mist-200">
+              <KeyRound size={14} className="text-brand-400" /> Gemini 官方 API
+            </h3>
+            <p className="mt-1 text-[11.5px] text-ink-500">API Key 只保存在服务端，加密写入数据库；普通用户无法查看。</p>
+          </div>
+          <Badge tone={settings.geminiApiKeyConfigured ? 'ok' : 'warn'}>
+            {settings.geminiApiKeyConfigured ? 'Key 已配置' : '未配置'}
+          </Badge>
+        </div>
+        <div className="space-y-3.5">
+          <Field label="启用 Gemini">
+            <Select value={settings.geminiEnabled || '0'} onChange={set('geminiEnabled')}>
+              <option value="1">启用</option>
+              <option value="0">停用</option>
+            </Select>
+          </Field>
+          <Field label="Gemini API Key" hint={settings.geminiApiKeyConfigured ? '留空表示保留当前 Key；输入新 Key 会覆盖。' : '从 Google AI Studio 创建。'}>
+            <Input
+              type="password"
+              autoComplete="new-password"
+              value={settings.geminiApiKey || ''}
+              onChange={(e) => setSettings((s) => ({ ...s, geminiApiKey: e.target.value, clearGeminiApiKey: false }))}
+              placeholder={settings.geminiApiKeyConfigured ? '••••••••••••（已保存）' : 'AIza...'}
+            />
+          </Field>
+          <div className="grid gap-3.5 sm:grid-cols-2">
+            <Field label="默认提示词模型">
+              {geminiModels?.text?.length ? (
+                <Select value={settings.geminiTextModel} onChange={set('geminiTextModel')}>
+                  {geminiModels.text.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
+                </Select>
+              ) : <Input value={settings.geminiTextModel || ''} onChange={set('geminiTextModel')} />}
+            </Field>
+            <Field label="默认人物图模型">
+              {geminiModels?.image?.length ? (
+                <Select value={settings.geminiImageModel} onChange={set('geminiImageModel')}>
+                  {geminiModels.image.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
+                </Select>
+              ) : <Input value={settings.geminiImageModel || ''} onChange={set('geminiImageModel')} />}
+            </Field>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" loading={testingGemini} onClick={testGemini}>
+              <RefreshCw size={13} /> 测试连接并加载模型
+            </Button>
+            {settings.geminiApiKeyConfigured && (
+              <Button
+                variant="danger"
+                onClick={() => setSettings((s) => ({ ...s, clearGeminiApiKey: true, geminiApiKey: '', geminiApiKeyConfigured: false }))}
+              >
+                清除 Key
+              </Button>
+            )}
+          </div>
         </div>
       </div>
 

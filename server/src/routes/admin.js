@@ -1,7 +1,10 @@
 import { Router } from 'express';
 import { requireAuth, requireAdmin, publicUser } from '../auth.js';
-import { db, addCredits, getSettings, setSetting, upsertAccount } from '../db.js';
+import {
+  db, addCredits, getSettings, setSetting, upsertAccount, getSecretSetting, setSecretSetting,
+} from '../db.js';
 import * as muse from '../muse.js';
+import * as gemini from '../gemini.js';
 
 const r = Router();
 r.use(requireAuth, requireAdmin);
@@ -94,13 +97,35 @@ r.get('/trend', (_req, res) => {
   res.json({ days });
 });
 
-r.get('/settings', (_req, res) => res.json({ settings: getSettings() }));
+function safeSettings() {
+  const settings = { ...getSettings() };
+  delete settings.geminiApiKey;
+  settings.geminiApiKeyConfigured = !!getSecretSetting('geminiApiKey');
+  return settings;
+}
+
+r.get('/settings', (_req, res) => res.json({ settings: safeSettings() }));
 r.patch('/settings', (req, res) => {
-  const allow = ['siteName', 'signupCredits', 'priceVideoBase', 'priceVideoPerSecond', 'priceImage', 'allowRegister', 'notice'];
+  const allow = [
+    'siteName', 'signupCredits', 'priceVideoBase', 'priceVideoPerSecond', 'priceImage',
+    'allowRegister', 'notice', 'realismEnabled', 'geminiEnabled', 'geminiTextModel', 'geminiImageModel',
+  ];
   for (const [k, v] of Object.entries(req.body || {})) {
     if (allow.includes(k)) setSetting(k, v);
   }
-  res.json({ settings: getSettings() });
+  const newGeminiKey = typeof req.body?.geminiApiKey === 'string' ? req.body.geminiApiKey.trim() : '';
+  if (newGeminiKey) setSecretSetting('geminiApiKey', newGeminiKey);
+  else if (req.body?.clearGeminiApiKey === true) setSecretSetting('geminiApiKey', '');
+  res.json({ settings: safeSettings() });
+});
+
+r.post('/gemini/test', async (_req, res) => {
+  try {
+    const models = await gemini.listModels({ force: true });
+    res.json({ ok: true, models, counts: { text: models.text.length, image: models.image.length } });
+  } catch (error) {
+    res.status(error.status || 502).json({ error: `Gemini 连接失败：${error.message}` });
+  }
 });
 
 r.get('/system', async (_req, res) => {

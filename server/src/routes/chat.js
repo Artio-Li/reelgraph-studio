@@ -1,12 +1,19 @@
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { CFG } from '../config.js';
+import { getSetting } from '../db.js';
+import * as gemini from '../gemini.js';
 
 const r = Router();
 
-export const TEXT_MODELS = [
-  { id: 'muse-spark', name: 'Muse Spark', desc: '内置文本模型，响应快' },
-];
+function textModels() {
+  const models = [{ id: 'muse-spark', name: 'Muse Spark', desc: '内置文本模型，响应快' }];
+  if (gemini.isEnabled()) {
+    const id = getSetting('geminiTextModel');
+    models.push({ id: `gemini/${id}`, name: id, desc: 'Gemini 官方 API' });
+  }
+  return models;
+}
 
 /** 站内文本对话：用 JWT 鉴权，转发到上游的 OpenAI 兼容接口 */
 r.post('/chat', requireAuth, async (req, res) => {
@@ -24,6 +31,10 @@ r.post('/chat', requireAuth, async (req, res) => {
   const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
 
   try {
+    if (String(model).startsWith('gemini/')) {
+      const out = await gemini.generateText({ model: String(model).slice(7), messages: clean });
+      return res.json(out);
+    }
     const up = await fetch(`${CFG.museBase}/v1/chat/completions`, {
       method: 'POST',
       headers: {
@@ -51,6 +62,6 @@ r.post('/chat', requireAuth, async (req, res) => {
   }
 });
 
-r.get('/chat/models', requireAuth, (_req, res) => res.json({ models: TEXT_MODELS }));
+r.get('/chat/models', requireAuth, (_req, res) => res.json({ models: textModels() }));
 
 export default r;

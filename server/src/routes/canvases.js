@@ -8,6 +8,7 @@ import {
   db, uid, now, createJob, getJob, updateJob, addCredits, priceOf,
 } from '../db.js';
 import * as muse from '../muse.js';
+import { applyRealism, realismEnabled } from '../realism.js';
 
 const r = Router();
 const UPLOAD_DIR = path.join(CFG.dataDir, 'uploads');
@@ -23,8 +24,14 @@ const MIME = {
 const ALLOWED_LINKS = new Set([
   'text:text>video:prompt',
   'image:image>video:ref',
+  'geminiImage:image>video:ref',
   'character:images>video:ref',
   'image:image>character:image',
+  'geminiImage:image>character:image',
+  'text:text>geminiImage:prompt',
+  'geminiPrompt:text>geminiImage:prompt',
+  'geminiPrompt:text>video:prompt',
+  'image:image>geminiImage:ref',
   'video:video>storyboard:clip',
 ]);
 
@@ -135,10 +142,20 @@ function validateGraph(doc) {
 
 function ownedUpload(userId, url) {
   const value = String(url || '');
-  if (!value.startsWith('/uploads/')) {
-    throw Object.assign(new Error('画布参考图必须先上传到当前账号'), { status: 400 });
-  }
   const filename = path.basename(value);
+  if (value.startsWith('/media/')) {
+    const job = db.prepare(
+      "SELECT * FROM jobs WHERE media_file = ? AND user_id = ? AND type = 'image' AND status = 'completed'"
+    ).get(filename, userId);
+    const file = path.join(MEDIA_DIR, filename);
+    if (!job || !fs.existsSync(file)) {
+      throw Object.assign(new Error('生成图片不存在或不属于当前用户'), { status: 400 });
+    }
+    return { filename, mime: MIME[path.extname(filename).toLowerCase()] || 'image/png', file, url: value };
+  }
+  if (!value.startsWith('/uploads/')) {
+    throw Object.assign(new Error('画布参考图必须是当前账号上传或生成的图片'), { status: 400 });
+  }
   const row = db.prepare('SELECT * FROM uploads WHERE filename = ? AND user_id = ?').get(filename, userId);
   if (!row || !row.mime?.startsWith('image/')) {
     throw Object.assign(new Error('参考图不存在、不属于当前用户或不是图片'), { status: 400 });
@@ -185,11 +202,11 @@ function resolveVideoInput(doc, byId, node, userId) {
   const refs = [];
   for (const edge of inputEdges(doc, node.id, 'ref')) {
     const source = byId.get(edge.source);
-    if (source?.type === 'image' && source.data?.url) refs.push(source.data.url);
+    if (['image', 'geminiImage'].includes(source?.type) && source.data?.url) refs.push(source.data.url);
     if (source?.type === 'character') {
       for (const imageEdge of inputEdges(doc, source.id, 'image')) {
         const imageNode = byId.get(imageEdge.source);
-        if (imageNode?.type === 'image' && imageNode.data?.url) refs.push(imageNode.data.url);
+        if (['image', 'geminiImage'].includes(imageNode?.type) && imageNode.data?.url) refs.push(imageNode.data.url);
       }
       for (const url of source.data?.refs || []) refs.push(url);
     }
@@ -200,7 +217,10 @@ function resolveVideoInput(doc, byId, node, userId) {
 
   const duration = CFG.videoDurations.includes(Number(node.data?.duration)) ? Number(node.data.duration) : 5;
   const size = CFG.sizes.includes(node.data?.size) ? node.data.size : '16:9';
-  const input = { prompt, images, duration, size, model: 'muse-video' };
+  const input = {
+    prompt: applyRealism(prompt, 'video'), images, duration, size, model: 'muse-video',
+    realism: realismEnabled(),
+  };
   const inputHash = crypto.createHash('sha256').update(JSON.stringify(input)).digest('hex');
   return { input, inputHash, cost: priceOf('video', input) };
 }
@@ -437,6 +457,7 @@ r.post('/:id/runs', requireAuth, async (req, res) => {
 
     const job = createJob(req.user.id, 'video', item.input.prompt, {
       duration: item.input.duration, size: item.input.size, images: item.input.images,
+      realism: item.input.realism,
       canvasId: row.id, canvasRunId: runId, canvasNodeId: item.node.id,
     }, item.cost);
     addCredits(req.user.id, -item.cost, '画布视频节点', job.id);
