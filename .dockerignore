@@ -1,0 +1,13 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.docker.example
+**/node_modules
+web/dist
+server/data
+upstream/muse2api/data
+**/*.log
+shots
+recon
+docs

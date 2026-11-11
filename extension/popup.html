@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>绑定 muse.ai 账号</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        width: 320px; margin: 0; padding: 16px;
+        background: #0a0c14; color: #e7eaf3;
+        font: 13px/1.5 -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      }
+      h1 { margin: 0 0 4px; font-size: 14px; }
+      p.sub { margin: 0 0 14px; font-size: 11.5px; color: #7c87a3; }
+      label { display: block; margin-bottom: 10px; font-size: 11.5px; color: #99a3bd; }
+      input {
+        width: 100%; margin-top: 4px; padding: 7px 9px;
+        border: 1px solid #252d42; border-radius: 8px;
+        background: #0e111b; color: #e7eaf3; font-size: 12px; outline: none;
+      }
+      input:focus { border-color: #6366f1; }
+      button {
+        width: 100%; padding: 9px; border: 0; border-radius: 9px;
+        background: linear-gradient(120deg, #6366f1, #a855f7);
+        color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+      }
+      button:disabled { opacity: .5; cursor: default; }
+      #log {
+        margin-top: 12px; padding: 9px; border-radius: 8px;
+        background: #121724; border: 1px solid #1e2434;
+        font-size: 11.5px; white-space: pre-wrap; color: #c3cadb;
+        max-height: 160px; overflow: auto;
+      }
+      #log.ok { border-color: #059669; color: #6ee7b7; }
+      #log.err { border-color: #be123c; color: #fda4af; }
+      #log:empty { display: none; }
+      a { color: #818cf8; }
+      .hint { margin-top: 10px; font-size: 11px; color: #4b5563; }
+    </style>
+  </head>
+  <body>
+    <h1>绑定 muse.ai 账号</h1>
+    <p class="sub">用浏览器扩展读取登录态，免去 F12 复制 Cookie。</p>
+
+    <label>平台地址
+      <input id="api" placeholder="http://127.0.0.1:8787" />
+    </label>
+    <label>绑定码
+      <input id="code" placeholder="在平台「账号管理」生成" />
+    </label>
+    <label>备注名（可留空）
+      <input id="label" placeholder="主号 / 小号A" />
+    </label>
+
+    <button id="go">读取并绑定</button>
+    <div id="log"></div>
+    <p class="hint">
+      动手前确认：这个浏览器已登录
+      <a href="https://muse.ai/" target="_blank">muse.ai</a>，能看到聊天界面。
+    </p>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

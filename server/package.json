@@ -1,0 +1,18 @@
+{
+  "name": "reelgraph-studio-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ReelGraph Studio 后端：账号池、任务编排、无限画布与作品库",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1"
+  }
+}

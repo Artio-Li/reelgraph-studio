@@ -1,0 +1,60 @@
+services:
+  muse2api:
+    build:
+      context: ./upstream/muse2api
+    image: reelgraph-muse2api:local
+    restart: unless-stopped
+    environment:
+      MUSE2API_KEY: ${MUSE2API_KEY:?Set MUSE2API_KEY in .env}
+      MUSE2API_HOST: 0.0.0.0
+      MUSE2API_PORT: 18610
+      MUSE2API_PUBLIC_BASE: ${MUSE2API_PUBLIC_BASE:-}
+      MUSE2API_IMAGE_TIMEOUT: ${MUSE2API_IMAGE_TIMEOUT:-240}
+      MUSE2API_VIDEO_TIMEOUT: ${MUSE2API_VIDEO_TIMEOUT:-900}
+      MUSE2API_CHAT_TIMEOUT: ${MUSE2API_CHAT_TIMEOUT:-300}
+      MUSE2API_CONCURRENCY: ${MUSE2API_CONCURRENCY:-2}
+    volumes:
+      - muse2api_data:/app/data
+    shm_size: 2gb
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18610/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  reelgraph:
+    build:
+      context: .
+    image: reelgraph-studio:local
+    restart: unless-stopped
+    depends_on:
+      muse2api:
+        condition: service_healthy
+    ports:
+      - "${REELGRAPH_PORT:-8787}:8787"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      DATA_DIR: /app/server/data
+      MUSE_BASE: http://muse2api:18610
+      MUSE_KEY: ${MUSE2API_KEY:?Set MUSE2API_KEY in .env}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      JWT_DAYS: ${JWT_DAYS:-14}
+      PUBLIC_BASE: ${PUBLIC_BASE:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@reelgraph.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      SIGNUP_CREDITS: ${SIGNUP_CREDITS:-100}
+      ALLOW_REGISTER: ${ALLOW_REGISTER:-0}
+    volumes:
+      - reelgraph_data:/app/server/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
+
+volumes:
+  reelgraph_data:
+  muse2api_data:

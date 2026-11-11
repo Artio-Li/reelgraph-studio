@@ -1,0 +1,36 @@
+# 依赖
+node_modules/
+upstream/muse2api/.venv/
+
+# 构建产物
+web/dist/
+
+# 运行时数据（含账号 Cookie，切勿提交）
+server/data/
+upstream/muse2api/data/
+upstream/muse2api/server.log
+upstream/muse2api/server.err.log
+server/server.log
+server/server.err.log
+web/dev.log
+web/dev.err.log
+
+# 环境配置（含密钥）
+.env
+.env.*
+!.env.example
+!.env.docker.example
+
+# 本地数据库、浏览器状态与凭据导出
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+**/browser-profile/
+**/profiles/
+**/credentials/
+**/deploy-backups/
+
+# 截图（按需保留）
+shots/*.png

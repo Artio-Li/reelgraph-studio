@@ -1,0 +1,188 @@
+@import 'tailwindcss';
+
+/* ============================================================
+   ReelGraph Studio 设计系统
+   底色 #0a0d16 · 品牌绿 #0fa98a · 高亮薄荷 #4fe3c1
+   ============================================================ */
+@theme {
+  /* 背景层 */
+  --color-ink-950: #060810;
+  --color-ink-900: #0a0d16;
+  --color-ink-850: #0d1019;
+  --color-ink-800: #12161f;
+  --color-ink-750: #151a25;
+  --color-ink-700: #1a1f2b;
+  --color-ink-600: #262c3a;
+  --color-ink-500: #333b4d;
+
+  /* 文字层 */
+  --color-mist-400: #6b7488;
+  --color-mist-300: #8b94a8;
+  --color-mist-200: #b8c0d0;
+  --color-mist-100: #dde3ee;
+
+  /* 品牌：青绿 */
+  --color-brand-300: #7ff0d6;
+  --color-brand-400: #4fe3c1;
+  --color-brand-500: #0fa98a;
+  --color-brand-600: #0c8a74;
+  --color-brand-700: #06231d;
+
+  /* 辅助色 */
+  --color-sky-400: #38c8f0;
+  --color-violet-400: #a78bfa;
+  --color-violet-500: #8b5cf6;
+  --color-gold-400: #f59e0b;
+  --color-rose-400: #f43f5e;
+
+  --font-display: 'Baloo 2', 'LXGW WenKai', 'PingFang SC', system-ui, sans-serif;
+  --font-sans: 'Geist', 'PingFang SC', 'Microsoft YaHei', 'Source Han Sans CN', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, Menlo, Consolas, monospace;
+  --font-kai: 'LXGW WenKai', 'Kaiti SC', 'STKaiti', serif;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background: var(--color-ink-900);
+    color: var(--color-mist-100);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: 0.01em;
+  }
+  ::selection {
+    background: rgb(79 227 193 / 0.25);
+  }
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #1e2432;
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #2b3344;
+  }
+  input,
+  textarea,
+  select,
+  button {
+    font-family: inherit;
+  }
+  kbd {
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+}
+
+@layer utilities {
+  /* 顶栏/侧栏的玻璃感 */
+  .glass {
+    background: color-mix(in srgb, #0d1019 82%, transparent);
+    backdrop-filter: blur(16px);
+  }
+
+  /* 品牌渐变（按钮） */
+  .brand-gradient {
+    background-image: linear-gradient(135deg, #12b795 0%, #0fa98a 45%, #0a8f76 100%);
+  }
+  .brand-text {
+    background-image: linear-gradient(110deg, #7ff0d6 0%, #4fe3c1 50%, #38c8f0 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* 标准卡片 */
+  .card {
+    background: var(--color-ink-800);
+    border: 1px solid #1c2230;
+    border-radius: 16px;
+  }
+  .card-hover {
+    transition: border-color 0.18s, background 0.18s, transform 0.18s;
+  }
+  .card-hover:hover {
+    border-color: #2a3446;
+    background: var(--color-ink-750);
+  }
+
+  /* 页面底纹：细网格 + 顶部青绿光晕 */
+  .page-bg {
+    position: relative;
+    background-color: var(--color-ink-900);
+    background-image:
+      radial-gradient(900px 420px at 18% -8%, rgb(15 169 138 / 0.10), transparent 70%),
+      radial-gradient(700px 380px at 92% -12%, rgb(56 200 240 / 0.06), transparent 70%),
+      linear-gradient(to right, rgb(255 255 255 / 0.018) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(255 255 255 / 0.018) 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 44px 44px, 44px 44px;
+  }
+
+  /* 小标签（ARCHIVE / WORKSPACE 那种） */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--color-mist-400);
+  }
+
+  /* 发光边框（GPU ONLINE 卡片） */
+  .glow-frame {
+    box-shadow:
+      0 0 0 1px rgb(79 227 193 / 0.18),
+      0 0 40px -12px rgb(15 169 138 / 0.45),
+      inset 0 1px 0 rgb(255 255 255 / 0.04);
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .shimmer {
+    background: linear-gradient(90deg, #10141d 25%, #171d28 50%, #10141d 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.4s infinite;
+  }
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  .fade-in {
+    animation: fadeIn 0.35s ease both;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+
+  .pulse-dot {
+    animation: pulseDot 2s ease-in-out infinite;
+  }
+  @keyframes pulseDot {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgb(79 227 193 / 0.5); }
+    50% { opacity: 0.75; box-shadow: 0 0 0 5px rgb(79 227 193 / 0); }
+  }
+
+  /* 滚动字幕（AI 要闻） */
+  .marquee-track {
+    animation: marquee 32s linear infinite;
+  }
+  .marquee:hover .marquee-track {
+    animation-play-state: paused;
+  }
+  @keyframes marquee {
+    from { transform: translateY(0); }
+    to { transform: translateY(-50%); }
+  }
+}

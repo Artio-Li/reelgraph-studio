@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "ReelGraph Studio 账号绑定",
+  "version": "1.0.0",
+  "description": "在已登录 muse.ai 的浏览器里，一键把账号绑定到你的 ReelGraph Studio，无需 F12 复制 Cookie。",
+  "permissions": ["cookies", "storage", "activeTab"],
+  "host_permissions": [
+    "https://muse.ai/*",
+    "https://*.muse.ai/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "绑定 muse.ai 账号"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

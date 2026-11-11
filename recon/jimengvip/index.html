@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <link rel="icon" type="image/png" sizes="any" href="/favicon.png" />
+    <link rel="shortcut icon" type="image/png" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/favicon.png" />
+    <!-- viewport-fit=cover: 让页面延伸到刘海/圆角区域, 配合 env(safe-area-inset-*) 做安全区内边距 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0A0D16" />
+    <!-- 默认深墨夜主题: 在 CSS/JS 加载前同步设置 html.dark, 避免浅色闪屏 (FOUC) -->
+    <script>
+      (function () {
+        try {
+          var raw = localStorage.getItem('frontend-theme');
+          var mode = raw ? (JSON.parse(raw) && JSON.parse(raw).state && JSON.parse(raw).state.mode) || 'dark' : 'dark';
+          if (mode === 'dark') document.documentElement.classList.add('dark');
+        } catch (e) { document.documentElement.classList.add('dark'); }
+      })();
+    </script>
+    <!-- Web 字体: 标题 Baloo 2 + 正文霞鹜文楷 + 数据等宽 JetBrains Mono (国内镜像, unicode-range 分包按需下载, 失败回退幼圆/系统字体) -->
+    <link rel="preconnect" href="https://fonts.loli.net" />
+    <link rel="preconnect" href="https://gstatic.loli.net" crossorigin />
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+    <link href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/style.css" rel="stylesheet" />
+    <link href="https://fonts.loli.net/css2?family=Baloo+2:wght@600;700;800&display=swap" rel="stylesheet" />
+    <link href="https://fonts.loli.net/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+    <!-- 搜索引擎站点验证 -->
+    <meta name="bytedance-verification-code" content="caOMmuQ7jezavGU5yzpF" />
+    <meta name="baidu-site-verification" content="codeva-vtPNzJXMbC" />
+    <meta name="360-site-verification" content="c7222d8b5140b26794b7b047fd899fe0" />
+    <meta name="shenma-site-verification" content="42e320859ca959673b826b727f4be2af_1781982419" />
+    <meta name="sogou_site_verification" content="IuRbUnfW7l" />
+
+    <title>XinMeng AI - AI图片视频生成平台 | 豆包Seedance/Grok Imagine/Nano Banana多模型聚合</title>
+    <meta name="description" content="XinMeng AI 是聚合多模型 AI 能力的 SaaS 平台，支持豆包 Seedance 2.0 视频生成、Grok Imagine 图片生成、Nano Banana 2/Pro 图片生成、DeepSeek 文本生成。提供文生图、文生视频、图生视频、首尾帧视频、参考图融合、OpenAI 兼容 API，按量计费，稳定高速。" />
+    <meta name="keywords" content="AI图片生成,AI视频生成,豆包Seedance,Seedance 2.0,Grok Imagine,Nano Banana,Nano Banana Pro,GPT Image 2,DeepSeek,文生图,文生视频,图生视频,首尾帧视频,AI创作平台,AI API,OpenAI兼容API,按量计费,AI SaaS平台,多模型聚合,智能创作" />
+    <meta name="author" content="XinMeng AI" />
+    <meta name="robots" content="index, follow, max-image-preview: large, max-snippet: -1, max-video-preview: -1" />
+    <meta name="googlebot" content="index, follow, max-image-preview: large, max-snippet: -1, max-video-preview: -1" />
+    <meta name="bingbot" content="index, follow" />
+    <link rel="canonical" href="https://www.jimengvip.online/" />
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="XinMeng AI - AI图片视频生成平台 | 豆包Seedance/Grok Imagine多模型聚合" />
+    <meta property="og:description" content="聚合豆包 Seedance 2.0、Grok Imagine、Nano Banana、DeepSeek 等主流大模型。支持文生图、文生视频、图生视频、首尾帧视频、参考图融合、OpenAI 兼容 API，按量计费。" />
+    <meta property="og:url" content="https://www.jimengvip.online/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="XinMeng AI" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:image" content="https://www.jimengvip.online/og-cover.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="XinMeng AI - AI图片视频生成平台 | 豆包Seedance/Grok Imagine多模型聚合" />
+    <meta name="twitter:description" content="聚合豆包 Seedance 2.0、Grok Imagine、Nano Banana、DeepSeek 等主流大模型。文生图、文生视频、图生视频、OpenAI 兼容 API，按量计费。" />
+    <meta name="twitter:image" content="https://www.jimengvip.online/og-cover.png" />
+
+    <!-- 结构化数据: WebApplication -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "XinMeng AI",
+      "alternateName": "新梦AI",
+      "url": "https://www.jimengvip.online/",
+      "description": "聚合多模型 AI 能力的 SaaS 平台 - 统一接入豆包 Seedance、Grok Imagine、Nano Banana、DeepSeek 等主流大模型。支持文生文、文生图、文生视频、图生视频、参考图融合、首尾帧视频，提供 OpenAI 兼容 API 接口，按量计费。",
+      "applicationCategory": "MultimediaApplication",
+      "operatingSystem": "Web",
+      "browserRequirements": "Requires JavaScript",
+      "inLanguage": "zh-CN",
+      "offers": {
+        "@type": "Offer",
+        "priceType": "Pay per use",
+        "price": "0",
+        "priceCurrency": "CNY",
+        "description": "按量计费，无需包月，注册即送免费积分"
+      },
+      "featureList": [
+        "文生文 (Text to Text) - DeepSeek V4-Pro",
+        "文生图 (Text to Image) - Nano Banana 2/Pro, GPT Image 2, Grok Imagine",
+        "文生视频 (Text to Video) - 豆包 Seedance 2.0",
+        "图生视频 (Image to Video) - 豆包 Seedance 2.0",
+        "首尾帧视频 (First Last Frame Video) - Seedance 2.0",
+        "参考图融合 (Reference Image Fusion)",
+        "参考视频生成 (Reference Video Generation)",
+        "有声视频生成 (Audio Video Generation)",
+        "API 接入 (OpenAI Compatible API)"
+      ],
+      "provider": {
+        "@type": "Organization",
+        "name": "XinMeng AI",
+        "url": "https://www.jimengvip.online/"
+      },
+      "aggregateRating": {
+        "@type": "AggregateRating",
+        "ratingValue": "4.8",
+        "ratingCount": "1280",
+        "bestRating": "5"
+      }
+    }
+    </script>
+
+    <!-- 结构化数据: WebSite (带搜索框) -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "name": "XinMeng AI",
+      "alternateName": "新梦AI",
+      "url": "https://www.jimengvip.online/",
+      "description": "聚合多模型 AI 能力的 SaaS 平台",
+      "inLanguage": "zh-CN",
+      "potentialAction": {
+        "@type": "SearchAction",
+        "target": {
+          "@type": "EntryPoint",
+          "urlTemplate": "https://www.jimengvip.online/home?q={search_term_string}"
+        },
+        "query-input": "required name=search_term_string"
+      }
+    }
+    </script>
+
+    <!-- 结构化数据: Organization -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Organization",
+      "name": "XinMeng AI",
+      "alternateName": "新梦AI",
+      "url": "https://www.jimengvip.online/",
+      "logo": "https://www.jimengvip.online/favicon.png",
+      "description": "聚合多模型 AI 能力的 SaaS 平台",
+      "sameAs": []
+    }
+    </script>
+
+    <!-- 结构化数据: FAQPage (常见问题) -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "XinMeng AI 支持哪些 AI 模型？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "XinMeng AI 聚合了豆包 Seedance 2.0（视频生成）、Grok Imagine（图片生成）、Nano Banana 2/Pro（图片生成）、GPT Image 2（图片生成）、DeepSeek V4-Pro（文本生成）、Omni-Flash（视频生成）等主流大模型，一站式满足文生文、文生图、文生视频需求。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "豆包 Seedance 2.0 视频生成支持哪些功能？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "豆包 Seedance 2.0 支持文生视频、图生视频（首帧/尾帧）、首尾帧视频、参考视频生成、参考音频生成、有声视频生成。分辨率支持 480p/720p/1080p，时长 5-15 秒，宽高比支持 16:9、9:16、1:1、4:3、21:9 等。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "XinMeng AI 如何收费？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "XinMeng AI 采用按量计费模式，无需包月。注册即送免费积分，用完可充值。不同模型和清晰度价格不同，例如图片生成按张计费，视频生成按秒计费。详细价格请查看 API 平台页面。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "XinMeng AI 提供 API 接口吗？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "提供。XinMeng AI 提供 OpenAI 兼容 API 接口，支持 /v1/chat/completions、/v1/images/generations、/v1/videos/generations 等标准端点。用户可在 API 平台页面申请 API Key，接入自己的应用。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Nano Banana 和 GPT Image 2 有什么区别？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Nano Banana 2 和 Nano Banana Pro 是 Google Gemini 系列的图片生成模型，擅长写实风格图片。GPT Image 2 是 OpenAI 系列的图片生成模型，擅长理解和遵循复杂提示词。Grok Imagine 是 xAI 的图片生成模型。三者各有优势，可根据需求选择。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "XinMeng AI 支持图生视频吗？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "支持。使用豆包 Seedance 2.0 模型，可上传图片作为首帧或尾帧生成视频，也支持同时指定首帧和尾帧让 AI 生成过渡视频。还支持上传参考视频和参考音频进行多模态视频生成。"
+          }
+        }
+      ]
+    }
+    </script>
+
+    <!-- 结构化数据: BreadcrumbList -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "首页",
+          "item": "https://www.jimengvip.online/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "作品广场",
+          "item": "https://www.jimengvip.online/home"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "创作中心",
+          "item": "https://www.jimengvip.online/create"
+        },
+        {
+          "@type": "ListItem",
+          "position": 4,
+          "name": "API 平台",
+          "item": "https://www.jimengvip.online/api-platform"
+        }
+      ]
+    }
+    </script>
+    <script type="module" crossorigin src="/assets/index-P71l8Iua.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/react-vendor-DGJdJ1XM.js">
+    <link rel="modulepreload" crossorigin href="/assets/query-vendor-D_bsvPjj.js">
+    <link rel="modulepreload" crossorigin href="/assets/antd-vendor-CCFD0se_.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-C7kowFt6.css">
+  </head>
+  <body>
+    <div id="root">
+      <noscript>
+        <div style="padding:24px;font-family:sans-serif;max-width:800px;margin:0 auto;">
+          <h1>XinMeng AI - 聚合多模型 AI 图片视频生成平台</h1>
+          <p>XinMeng AI 是一个聚合多模型 AI 能力的 SaaS 平台，统一接入豆包 Seedance 2.0、Grok Imagine、Nano Banana 2/Pro、GPT Image 2、DeepSeek V4-Pro 等主流大模型。支持文生文、文生图、文生视频、图生视频、首尾帧视频、参考图融合、参考视频生成、有声视频生成，提供 OpenAI 兼容 API 接口，按量计费。</p>
+
+          <h2>核心功能</h2>
+          <ul>
+            <li><a href="/create">AI 创作中心</a> - 文生图、文生视频、图生视频、首尾帧视频</li>
+            <li><a href="/api-platform">API 接口与价格</a> - OpenAI 兼容 API，按量计费</li>
+            <li><a href="/home">作品广场</a> - 浏览社区创作</li>
+            <li><a href="/invite">邀请好友送积分</a></li>
+          </ul>
+
+          <h2>支持的 AI 模型</h2>
+          <h3>视频生成模型</h3>
+          <ul>
+            <li><strong>豆包 Seedance 2.0</strong> - 字节跳动视频生成模型，支持文生视频、图生视频、首尾帧、参考视频、有声视频，480p/720p/1080p，5-15 秒</li>
+            <li><strong>豆包 Seedance 2.0 Video</strong> - 支持参考视频和参考音频的视频生成</li>
+            <li><strong>Omni-Flash</strong> - 快速视频生成模型</li>
+            <li><strong>Grok Imagine 1.5 Video</strong> - xAI 视频生成模型</li>
+          </ul>
+          <h3>图片生成模型</h3>
+          <ul>
+            <li><strong>Nano Banana 2</strong> - Google Gemini 图片生成，写实风格</li>
+            <li><strong>Nano Banana Pro</strong> - Google Gemini 高清图片生成</li>
+            <li><strong>GPT Image 2</strong> - OpenAI 图片生成，复杂提示词理解</li>
+            <li><strong>Grok Imagine Image</strong> - xAI 图片生成模型</li>
+          </ul>
+          <h3>文本生成模型</h3>
+          <ul>
+            <li><strong>DeepSeek V4-Pro</strong> - 深度求索文本生成模型</li>
+          </ul>
+
+          <h2>常见问题</h2>
+          <h3>XinMeng AI 支持哪些 AI 模型？</h3>
+          <p>XinMeng AI 聚合了豆包 Seedance 2.0、Grok Imagine、Nano Banana 2/Pro、GPT Image 2、DeepSeek V4-Pro、Omni-Flash 等主流大模型。</p>
+          <h3>如何收费？</h3>
+          <p>按量计费，无需包月。注册即送免费积分，图片按张计费，视频按秒计费。</p>
+          <h3>提供 API 接口吗？</h3>
+          <p>提供 OpenAI 兼容 API，支持 /v1/chat/completions、/v1/images/generations、/v1/videos/generations 端点。</p>
+
+          <p>请启用 JavaScript 以获得完整体验。</p>
+        </div>
+      </noscript>
+    </div>
+  </body>
+</html>
