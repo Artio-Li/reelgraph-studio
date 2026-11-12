@@ -1,6 +1,6 @@
 # ReelGraph Studio
 
-ReelGraph Studio 是一个可自托管的 AI 视频创作工作台：把 Gemini / Antigravity 提示词与人物图、全局真实拍摄模式、Muse 账号池、快捷生成、任务管理和节点式无限画布整合到同一个 Web 应用中。
+ReelGraph Studio 是一个可自托管的 AI 视频创作工作台：把 Gemini / Antigravity / ChatGPT2API 提示词与人物图、全局真实拍摄模式、Muse 账号池、快捷生成、任务管理和节点式无限画布整合到同一个 Web 应用中。
 
 本项目最初借鉴并基于 [LIUFelix2004/museAPI-video](https://github.com/LIUFelix2004/museAPI-video) 的平台代码继续开发，在此基础上补充了账号批量登录导入、账号级代理、可持久化无限画布、节点执行闭环、Docker Compose 部署和 ReelGraph Studio 品牌整理。
 
@@ -9,7 +9,7 @@ ReelGraph Studio 是一个可自托管的 AI 视频创作工作台：把 Gemini 
 ## 能做什么
 
 - **快捷创作**：提示词、参考图、模型、时长、画幅与生成队列统一管理。
-- **AI 创作**：可在 Gemini 官方 API 与 Antigravity Provider 间切换，关键词扩写视频提示词，并支持多张人物参考图生成统一角色形象。
+- **AI 创作**：可在 Gemini 官方 API、Antigravity 与 ChatGPT2API Provider 间切换，关键词扩写视频提示词，并支持多张人物参考图生成统一角色形象。
 - **全局真实拍摄模式**：管理员一次开启后，提示词、图片、视频、无限画布和自动队列都会由服务端统一附加去 AI 感的物理拍摄约束。
 - **无限画布**：文本、图片、Gemini 提示词、Gemini 人物图、角色、视频、分镜节点；支持视频续集链、串行生成、顺序预览、拼接导出、循环检测、自动保存、结果回填与缓存复用。
 - **Muse 账号池**：Cookie、一键绑定、邮箱验证码、邮箱 + 密码 + 2FA 批量导入。
@@ -112,10 +112,10 @@ Windows 也可以使用仓库根目录的 `start.ps1` / `stop.ps1`。
 | 路由 | 功能 |
 |---|---|
 | `/create` | 快捷创作、参考图、参数与生成队列 |
-| `/gemini` | Gemini / Antigravity 提示词与人物图创作台 |
+| `/gemini` | Gemini / Antigravity / ChatGPT2API 提示词与人物图创作台 |
 | `/canvas` | 节点式无限画布与工作流执行 |
 | `/accounts` | 账号导入、额度、保活和代理配置 |
-| `/admin` | 管理员配置（Gemini、Antigravity、默认模型、全局真实拍摄模式等） |
+| `/admin` | 管理员配置（Gemini、Antigravity、ChatGPT2API、默认模型、全局真实拍摄模式等） |
 
 ## Gemini 官方 API
 
@@ -141,14 +141,25 @@ Antigravity 文本生成使用 OpenAI 兼容的 `/v1/chat/completions`，图片�
 
 如果 Antigravity Manager 运行在个人电脑，而 ReelGraph 部署在公网服务器，不能填写 `localhost`，必须使用公网可达的 HTTPS 地址、内网穿透地址，或把 Antigravity 一同部署到服务器可访问的网络中。
 
+## ChatGPT2API Provider
+
+管理员可以把自建的 `chatgpt2api` 作为独立 Provider 接入：
+
+1. 在 `/admin` 的“设置”页启用 ChatGPT2API。
+2. 填写服务地址，例如 `https://43.130.43.32:13000`；末尾有无 `/v1` 都可以。
+3. 填写 chatgpt2api 的 Bearer Key，保存后点击“测试连接并加载模型”。
+4. 选择默认文本模型与图片模型；普通用户随后可在 AI 创作台和无限画布中选择 ChatGPT2API。
+
+文生图调用 OpenAI 兼容的 `/v1/images/generations`；连接人物参考图时自动切换到 `/v1/images/edits`，参考图会以 Base64 在服务端之间传递，不要求图片公网可访问。生成结果统一保存到 ReelGraph 媒体目录，可继续连接视频节点。提示词扩写和站内对话使用 `/v1/chat/completions`。API Key 通过 AES-256-GCM 加密保存在服务端，不会返回给普通用户或浏览器。
+
 ## 全局“真实拍摄 / 去 AI 感”模式
 
 管理员进入“管理员 → 设置 → 全局生成风格”即可开启或关闭。新部署默认开启，配置写入 SQLite，重启和重建容器后仍然有效。
 
 开启后，后端会统一补充现实拍摄约束，普通用户不需要在每次生成时重复粘贴：
 
-- Gemini / Antigravity 视频提示词扩写
-- Gemini、Antigravity 与 Muse 图片生成
+- Gemini / Antigravity / ChatGPT2API 视频提示词扩写
+- Gemini、Antigravity、ChatGPT2API 与 Muse 图片生成
 - Muse 视频生成
 - 无限画布的视频节点与 AI 节点
 - 自动生成队列

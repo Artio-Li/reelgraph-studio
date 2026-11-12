@@ -4,6 +4,7 @@ import { CFG } from '../config.js';
 import { getSetting } from '../db.js';
 import * as gemini from '../gemini.js';
 import * as antigravity from '../antigravity.js';
+import * as chatgpt2api from '../chatgpt2api.js';
 
 const r = Router();
 
@@ -16,6 +17,10 @@ function textModels() {
   if (antigravity.isEnabled()) {
     const id = getSetting('antigravityTextModel');
     models.push({ id: `antigravity/${id}`, name: id, desc: 'Antigravity Provider' });
+  }
+  if (chatgpt2api.isEnabled()) {
+    const id = getSetting('chatgpt2apiTextModel');
+    models.push({ id: `chatgpt2api/${id}`, name: id, desc: 'ChatGPT2API Provider' });
   }
   return models;
 }
@@ -42,6 +47,10 @@ r.post('/chat', requireAuth, async (req, res) => {
     }
     if (String(model).startsWith('antigravity/')) {
       const out = await antigravity.generateText({ model: String(model).slice(12), messages: clean });
+      return res.json(out);
+    }
+    if (String(model).startsWith('chatgpt2api/')) {
+      const out = await chatgpt2api.generateText({ model: String(model).slice(12), messages: clean });
       return res.json(out);
     }
     const up = await fetch(`${CFG.museBase}/v1/chat/completions`, {

@@ -132,7 +132,7 @@ function ImageNode({ data }) {
 function GeminiPromptNode({ data }) {
   return (
     <Card tone="violet">
-      <Header icon={Wand2} title={nodeTitle(data, 'Gemini 提示词')} tag="GEMINI · TEXT" />
+      <Header icon={Wand2} title={nodeTitle(data, 'AI 提示词')} tag="AI · TEXT" />
       <p className="nodrag line-clamp-5 min-h-20 whitespace-pre-wrap px-3 py-2.5 text-[10px] leading-relaxed text-mist-300">
         {data.content || data.keywords || '在右侧输入关键词并生成'}
       </p>
@@ -144,9 +144,9 @@ function GeminiPromptNode({ data }) {
 function GeminiImageNode({ data }) {
   return (
     <Card tone="sky">
-      <Header icon={Bot} title={nodeTitle(data, 'Gemini 人物图')} tag="GEMINI · IMAGE" />
+      <Header icon={Bot} title={nodeTitle(data, 'AI 人物图')} tag="AI · IMAGE" />
       {data.url
-        ? <img src={data.url} alt="Gemini 人物图" className="nodrag h-36 w-full object-cover" />
+        ? <img src={data.url} alt="AI 人物图" className="nodrag h-36 w-full object-cover" />
         : <div className="grid h-28 place-items-center px-3 text-center text-[10px] text-mist-400">连接提示词和参考图后，在右侧点击生成</div>}
       <div className="px-3 py-2 font-mono text-[9px] text-mist-400">{data.size || '9:16'} · {data.resolution || '1K'}</div>
       <Handle type="target" id="prompt" position={Position.Left} style={{ top: '34%' }} className="!h-2.5 !w-2.5 !border-violet-300 !bg-violet-500" />

@@ -248,6 +248,10 @@ const DEFAULT_SETTINGS = {
   antigravityBaseUrl: '',
   antigravityTextModel: 'gemini-3-flash',
   antigravityImageModel: 'gemini-3-pro-image',
+  chatgpt2apiEnabled: '0',
+  chatgpt2apiBaseUrl: '',
+  chatgpt2apiTextModel: 'gpt-5-6-mini',
+  chatgpt2apiImageModel: 'gpt-image-2',
 };
 
 export function getSettings() {

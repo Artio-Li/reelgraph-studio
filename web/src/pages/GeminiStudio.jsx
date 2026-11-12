@@ -120,7 +120,7 @@ export default function GeminiStudio() {
         <div className="card mb-4 flex flex-wrap items-center justify-between gap-3 px-4 py-3">
           <div>
             <p className="text-[12.5px] font-medium text-mist-200">生成服务</p>
-            <p className="mt-0.5 text-[11px] text-mist-400">管理员可同时启用官方 Gemini 与 Antigravity，生成时自由切换。</p>
+            <p className="mt-0.5 text-[11px] text-mist-400">管理员可同时启用 Gemini、Antigravity 与 ChatGPT2API，生成时自由切换。</p>
           </div>
           <Select className="min-w-52" value={provider} onChange={(e) => switchProvider(e.target.value)}>
             {availableProviders.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
@@ -130,7 +130,7 @@ export default function GeminiStudio() {
 
       {!meta?.enabled ? (
         <div className="card grid min-h-64 place-items-center p-8 text-center">
-          <div><Bot size={30} className="mx-auto text-amber-300" /><p className="mt-3 text-mist-200">AI Provider 尚未启用</p><p className="mt-1 text-[12px] text-mist-400">请管理员进入“管理员 → 设置”，配置 Gemini 官方 API 或 Antigravity Provider。</p></div>
+          <div><Bot size={30} className="mx-auto text-amber-300" /><p className="mt-3 text-mist-200">AI Provider 尚未启用</p><p className="mt-1 text-[12px] text-mist-400">请管理员进入“管理员 → 设置”，配置 Gemini、Antigravity 或 ChatGPT2API Provider。</p></div>
         </div>
       ) : tab === 'prompt' ? (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,430px)_1fr]">

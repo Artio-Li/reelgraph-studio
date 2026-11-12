@@ -3,13 +3,14 @@ import path from 'node:path';
 import { Router } from 'express';
 import multer from 'multer';
 import { requireAuth } from '../auth.js';
-import { CFG } from '../config.js';
+import { CFG, MEDIA_DIR } from '../config.js';
 import {
   db, uid, now, createJob, getJob, updateJob, listJobs, addCredits, priceOf, getSettings,
 } from '../db.js';
 import * as muse from '../muse.js';
 import * as gemini from '../gemini.js';
 import * as antigravity from '../antigravity.js';
+import * as chatgpt2api from '../chatgpt2api.js';
 import { applyRealism, realismEnabled } from '../realism.js';
 
 const r = Router();
@@ -43,7 +44,8 @@ const MIME = {
 /** 把平台本地上传的参考素材转成 data URL，上游无需公网访问权限 */
 function toDataUrl(localUrl) {
   const name = path.basename(String(localUrl));
-  const file = path.join(UPLOAD_DIR, name);
+  const root = String(localUrl).startsWith('/media/') ? MEDIA_DIR : UPLOAD_DIR;
+  const file = path.join(root, name);
   if (!fs.existsSync(file)) return null;
   const ext = path.extname(file).toLowerCase();
   const mime = MIME[ext] || 'application/octet-stream';
@@ -57,7 +59,7 @@ function normalizeRefs(list) {
   for (const item of list) {
     if (!item) continue;
     if (typeof item === 'string') {
-      if (item.startsWith('/uploads/')) {
+      if (item.startsWith('/uploads/') || item.startsWith('/media/')) {
         const d = toDataUrl(item);
         if (d) out.push({ url: d });
       } else if (/^(https?:|data:)/i.test(item)) {
@@ -136,7 +138,7 @@ r.post('/images', requireAuth, async (req, res) => {
   }
   const params = {
     size: CFG.sizes.includes(size) ? size : '1:1', images,
-    provider: ['gemini', 'antigravity'].includes(provider) ? provider : 'muse', model, resolution,
+    provider: ['gemini', 'antigravity', 'chatgpt2api'].includes(provider) ? provider : 'muse', model, resolution,
     realism: realismEnabled(),
   };
   const cost = priceOf('image', params);
@@ -151,8 +153,9 @@ r.post('/images', requireAuth, async (req, res) => {
 
   try {
     const refs = normalizeRefs(images);
-    if (['gemini', 'antigravity'].includes(params.provider)) {
-      const target = params.provider === 'antigravity' ? antigravity : gemini;
+    if (['gemini', 'antigravity', 'chatgpt2api'].includes(params.provider)) {
+      const targets = { gemini, antigravity, chatgpt2api };
+      const target = targets[params.provider];
       const out = await target.generateImage({
         prompt: applyRealism(prompt, 'image'), model, size: params.size, resolution, images: refs, jobId: job.id,
       });

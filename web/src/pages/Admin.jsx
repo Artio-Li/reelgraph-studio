@@ -513,6 +513,8 @@ function SettingsPanel() {
   const [geminiModels, setGeminiModels] = useState(null);
   const [testingAntigravity, setTestingAntigravity] = useState(false);
   const [antigravityModels, setAntigravityModels] = useState(null);
+  const [testingChatgpt2api, setTestingChatgpt2api] = useState(false);
+  const [chatgpt2apiModels, setChatgpt2apiModels] = useState(null);
 
   useEffect(() => {
     api.adminSettings().then((r) => setSettings(r.settings)).catch((e) => toast(e.message, 'error'));
@@ -563,6 +565,21 @@ function SettingsPanel() {
     }
   };
 
+  const testChatgpt2api = async () => {
+    setTestingChatgpt2api(true);
+    try {
+      const saved = await api.adminSaveSettings(settings);
+      setSettings(saved.settings);
+      const out = await api.adminTestChatgpt2api();
+      setChatgpt2apiModels(out.models);
+      toast(`ChatGPT2API 连接成功：${out.counts.text} 个文本模型，${out.counts.image} 个图片模型`, 'ok');
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      setTestingChatgpt2api(false);
+    }
+  };
+
   if (!settings) return <div className="grid place-items-center py-24 text-brand-400"><Spinner size={20} /></div>;
 
   return (
@@ -585,6 +602,78 @@ function SettingsPanel() {
           <Field label="注册赠送积分">
             <Input type="number" value={settings.signupCredits} onChange={set('signupCredits')} />
           </Field>
+        </div>
+      </div>
+
+      <div className="card p-5">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="flex items-center gap-2 text-[13.5px] font-semibold text-mist-200">
+              <KeyRound size={14} className="text-emerald-400" /> ChatGPT2API Provider
+            </h3>
+            <p className="mt-1 text-[11.5px] leading-5 text-ink-500">
+              连接 chatgpt2api 的 OpenAI 兼容接口。文生图使用 /v1/images/generations，参考图编辑使用 /v1/images/edits。
+            </p>
+          </div>
+          <Badge tone={settings.chatgpt2apiApiKeyConfigured ? 'ok' : 'warn'}>
+            {settings.chatgpt2apiApiKeyConfigured ? 'Key 已配置' : '未配置'}
+          </Badge>
+        </div>
+        <div className="space-y-3.5">
+          <Field label="启用 ChatGPT2API">
+            <Select value={settings.chatgpt2apiEnabled || '0'} onChange={set('chatgpt2apiEnabled')}>
+              <option value="1">启用</option>
+              <option value="0">停用</option>
+            </Select>
+          </Field>
+          <Field
+            label="服务地址"
+            hint="填写 ReelGraph 服务端可访问的 chatgpt2api 地址；末尾有无 /v1 都可以。"
+          >
+            <Input
+              value={settings.chatgpt2apiBaseUrl || ''}
+              onChange={set('chatgpt2apiBaseUrl')}
+              placeholder="例如：https://43.130.43.32:13000"
+            />
+          </Field>
+          <Field label="ChatGPT2API Key" hint={settings.chatgpt2apiApiKeyConfigured ? '留空表示保留当前 Key；输入新 Key 会覆盖。' : '填写 chatgpt2api 管理端配置的 Bearer Key。'}>
+            <Input
+              type="password"
+              autoComplete="new-password"
+              value={settings.chatgpt2apiApiKey || ''}
+              onChange={(e) => setSettings((s) => ({ ...s, chatgpt2apiApiKey: e.target.value, clearChatgpt2apiApiKey: false }))}
+              placeholder={settings.chatgpt2apiApiKeyConfigured ? '••••••••••••（已保存）' : 'sk-...'}
+            />
+          </Field>
+          <div className="grid gap-3.5 sm:grid-cols-2">
+            <Field label="默认提示词模型">
+              {chatgpt2apiModels?.text?.length ? (
+                <Select value={settings.chatgpt2apiTextModel} onChange={set('chatgpt2apiTextModel')}>
+                  {chatgpt2apiModels.text.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
+                </Select>
+              ) : <Input value={settings.chatgpt2apiTextModel || ''} onChange={set('chatgpt2apiTextModel')} />}
+            </Field>
+            <Field label="默认图片模型">
+              {chatgpt2apiModels?.image?.length ? (
+                <Select value={settings.chatgpt2apiImageModel} onChange={set('chatgpt2apiImageModel')}>
+                  {chatgpt2apiModels.image.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
+                </Select>
+              ) : <Input value={settings.chatgpt2apiImageModel || ''} onChange={set('chatgpt2apiImageModel')} />}
+            </Field>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" loading={testingChatgpt2api} onClick={testChatgpt2api}>
+              <RefreshCw size={13} /> 测试连接并加载模型
+            </Button>
+            {settings.chatgpt2apiApiKeyConfigured && (
+              <Button
+                variant="danger"
+                onClick={() => setSettings((s) => ({ ...s, clearChatgpt2apiApiKey: true, chatgpt2apiApiKey: '', chatgpt2apiApiKeyConfigured: false }))}
+              >
+                清除 Key
+              </Button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -674,7 +763,7 @@ function SettingsPanel() {
             {(settings.realismEnabled ?? '1') === '1' ? '已开启' : '已关闭'}
           </Badge>
         </div>
-        <Field label="真实拍摄 / 去 AI 感" hint="作用于 Gemini/Antigravity 提示词和图片、Muse 图片与视频、无限画布和自动队列。">
+        <Field label="真实拍摄 / 去 AI 感" hint="作用于 Gemini、Antigravity、ChatGPT2API 的提示词和图片，以及 Muse 图片与视频、无限画布和自动队列。">
           <Select value={settings.realismEnabled ?? '1'} onChange={set('realismEnabled')}>
             <option value="1">开启：自动附加真实拍摄约束</option>
             <option value="0">关闭：完全使用用户原始提示词</option>

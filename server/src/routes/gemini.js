@@ -3,6 +3,7 @@ import { requireAuth } from '../auth.js';
 import { getSetting } from '../db.js';
 import * as gemini from '../gemini.js';
 import * as antigravity from '../antigravity.js';
+import * as chatgpt2api from '../chatgpt2api.js';
 import { realismEnabled, REALISM_GENERATOR_RULES } from '../realism.js';
 
 const r = Router();
@@ -15,19 +16,30 @@ const PROMPT_SYSTEM = `你是 ReelGraph Studio 的专业 AI 视频提示词导�
 r.get('/gemini/meta', requireAuth, async (_req, res) => {
   const officialEnabled = gemini.isEnabled();
   const antigravityEnabled = antigravity.isEnabled();
+  const chatgpt2apiEnabled = chatgpt2api.isEnabled();
   let officialModels = { text: gemini.FALLBACK_TEXT_MODELS, image: gemini.FALLBACK_IMAGE_MODELS };
   let antigravityModels = { text: antigravity.FALLBACK_TEXT_MODELS, image: antigravity.FALLBACK_IMAGE_MODELS };
+  let chatgpt2apiModels = { text: chatgpt2api.FALLBACK_TEXT_MODELS, image: chatgpt2api.FALLBACK_IMAGE_MODELS };
   if (officialEnabled) try { officialModels = await gemini.listModels(); } catch { /* 使用兜底列表 */ }
   if (antigravityEnabled) try { antigravityModels = await antigravity.listModels(); } catch { /* 使用兜底列表 */ }
+  if (chatgpt2apiEnabled) try { chatgpt2apiModels = await chatgpt2api.listModels(); } catch { /* 使用兜底列表 */ }
+  const defaultProvider = officialEnabled ? 'gemini'
+    : antigravityEnabled ? 'antigravity'
+      : chatgpt2apiEnabled ? 'chatgpt2api' : 'gemini';
+  const defaultModels = defaultProvider === 'gemini' ? officialModels
+    : defaultProvider === 'antigravity' ? antigravityModels : chatgpt2apiModels;
+  const defaultTextModel = defaultProvider === 'gemini' ? getSetting('geminiTextModel')
+    : defaultProvider === 'antigravity' ? getSetting('antigravityTextModel')
+      : getSetting('chatgpt2apiTextModel');
+  const defaultImageModel = defaultProvider === 'gemini' ? getSetting('geminiImageModel')
+    : defaultProvider === 'antigravity' ? getSetting('antigravityImageModel')
+      : getSetting('chatgpt2apiImageModel');
   res.json({
-    enabled: officialEnabled || antigravityEnabled,
+    enabled: officialEnabled || antigravityEnabled || chatgpt2apiEnabled,
     realismEnabled: realismEnabled(),
-    models: officialEnabled ? officialModels : antigravityModels,
-    defaults: {
-      text: officialEnabled ? getSetting('geminiTextModel') : getSetting('antigravityTextModel'),
-      image: officialEnabled ? getSetting('geminiImageModel') : getSetting('antigravityImageModel'),
-    },
-    defaultProvider: officialEnabled ? 'gemini' : antigravityEnabled ? 'antigravity' : 'gemini',
+    models: defaultModels,
+    defaults: { text: defaultTextModel, image: defaultImageModel },
+    defaultProvider,
     providers: {
       gemini: {
         id: 'gemini', name: 'Gemini 官方 API', enabled: officialEnabled,
@@ -38,6 +50,11 @@ r.get('/gemini/meta', requireAuth, async (_req, res) => {
         id: 'antigravity', name: 'Antigravity', enabled: antigravityEnabled,
         models: antigravityModels,
         defaults: { text: getSetting('antigravityTextModel'), image: getSetting('antigravityImageModel') },
+      },
+      chatgpt2api: {
+        id: 'chatgpt2api', name: 'ChatGPT2API', enabled: chatgpt2apiEnabled,
+        models: chatgpt2apiModels,
+        defaults: { text: getSetting('chatgpt2apiTextModel'), image: getSetting('chatgpt2apiImageModel') },
       },
     },
   });
@@ -64,15 +81,19 @@ r.post('/gemini/prompts', requireAuth, async (req, res) => {
     const system = realismEnabled()
       ? `${PROMPT_SYSTEM}\n\n${REALISM_GENERATOR_RULES}`
       : PROMPT_SYSTEM;
-    const target = provider === 'antigravity' ? antigravity : gemini;
-    const defaultModel = provider === 'antigravity'
-      ? getSetting('antigravityTextModel') : getSetting('geminiTextModel');
-    const out = await target.generateText({
-      model: model || defaultModel,
+    const providers = {
+      gemini: { target: gemini, defaultModel: getSetting('geminiTextModel') },
+      antigravity: { target: antigravity, defaultModel: getSetting('antigravityTextModel') },
+      chatgpt2api: { target: chatgpt2api, defaultModel: getSetting('chatgpt2apiTextModel') },
+    };
+    const selected = providers[provider] || providers.gemini;
+    if (!selected.target.isEnabled()) throw Object.assign(new Error('当前 AI Provider 尚未启用'), { status: 503 });
+    const out = await selected.target.generateText({
+      model: model || selected.defaultModel,
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
       temperature: 0.8,
     });
-    res.json({ ...out, provider: provider === 'antigravity' ? 'antigravity' : 'gemini' });
+    res.json({ ...out, provider: providers[provider] ? provider : 'gemini' });
   } catch (error) {
     res.status(error.status || 502).json({ error: `生成提示词失败：${error.message}` });
   }

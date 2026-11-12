@@ -6,6 +6,7 @@ import {
 import * as muse from '../muse.js';
 import * as gemini from '../gemini.js';
 import * as antigravity from '../antigravity.js';
+import * as chatgpt2api from '../chatgpt2api.js';
 
 const r = Router();
 r.use(requireAuth, requireAdmin);
@@ -102,8 +103,10 @@ function safeSettings() {
   const settings = { ...getSettings() };
   delete settings.geminiApiKey;
   delete settings.antigravityApiKey;
+  delete settings.chatgpt2apiApiKey;
   settings.geminiApiKeyConfigured = !!getSecretSetting('geminiApiKey');
   settings.antigravityApiKeyConfigured = !!getSecretSetting('antigravityApiKey');
+  settings.chatgpt2apiApiKeyConfigured = !!getSecretSetting('chatgpt2apiApiKey');
   return settings;
 }
 
@@ -113,6 +116,7 @@ r.patch('/settings', (req, res) => {
     'siteName', 'signupCredits', 'priceVideoBase', 'priceVideoPerSecond', 'priceImage',
     'allowRegister', 'notice', 'realismEnabled', 'geminiEnabled', 'geminiTextModel', 'geminiImageModel',
     'antigravityEnabled', 'antigravityBaseUrl', 'antigravityTextModel', 'antigravityImageModel',
+    'chatgpt2apiEnabled', 'chatgpt2apiBaseUrl', 'chatgpt2apiTextModel', 'chatgpt2apiImageModel',
   ];
   for (const [k, v] of Object.entries(req.body || {})) {
     if (allow.includes(k)) setSetting(k, v);
@@ -124,6 +128,10 @@ r.patch('/settings', (req, res) => {
     ? req.body.antigravityApiKey.trim() : '';
   if (newAntigravityKey) setSecretSetting('antigravityApiKey', newAntigravityKey);
   else if (req.body?.clearAntigravityApiKey === true) setSecretSetting('antigravityApiKey', '');
+  const newChatgpt2apiKey = typeof req.body?.chatgpt2apiApiKey === 'string'
+    ? req.body.chatgpt2apiApiKey.trim() : '';
+  if (newChatgpt2apiKey) setSecretSetting('chatgpt2apiApiKey', newChatgpt2apiKey);
+  else if (req.body?.clearChatgpt2apiApiKey === true) setSecretSetting('chatgpt2apiApiKey', '');
   res.json({ settings: safeSettings() });
 });
 
@@ -142,6 +150,15 @@ r.post('/antigravity/test', async (_req, res) => {
     res.json({ ok: true, models, counts: { text: models.text.length, image: models.image.length } });
   } catch (error) {
     res.status(error.status || 502).json({ error: `Antigravity 连接失败：${error.message}` });
+  }
+});
+
+r.post('/chatgpt2api/test', async (_req, res) => {
+  try {
+    const models = await chatgpt2api.listModels({ force: true });
+    res.json({ ok: true, models, counts: { text: models.text.length, image: models.image.length } });
+  } catch (error) {
+    res.status(error.status || 502).json({ error: `ChatGPT2API 连接失败：${error.message}` });
   }
 });
 
