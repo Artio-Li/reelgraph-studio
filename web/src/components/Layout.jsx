@@ -10,7 +10,7 @@ import { api } from '../lib/api.js';
 
 const NAV = [
   { to: '/create', label: '快捷创作', icon: Sparkles },
-  { to: '/gemini', label: 'Gemini 创作', icon: Bot },
+  { to: '/gemini', label: 'AI 创作', icon: Bot },
   { to: '/canvas', label: '无限画布', icon: Workflow },
   { to: '/accounts', label: 'muse 导入', icon: KeyRound },
 ];

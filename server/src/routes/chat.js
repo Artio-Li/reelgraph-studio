@@ -3,6 +3,7 @@ import { requireAuth } from '../auth.js';
 import { CFG } from '../config.js';
 import { getSetting } from '../db.js';
 import * as gemini from '../gemini.js';
+import * as antigravity from '../antigravity.js';
 
 const r = Router();
 
@@ -11,6 +12,10 @@ function textModels() {
   if (gemini.isEnabled()) {
     const id = getSetting('geminiTextModel');
     models.push({ id: `gemini/${id}`, name: id, desc: 'Gemini 官方 API' });
+  }
+  if (antigravity.isEnabled()) {
+    const id = getSetting('antigravityTextModel');
+    models.push({ id: `antigravity/${id}`, name: id, desc: 'Antigravity Provider' });
   }
   return models;
 }
@@ -33,6 +38,10 @@ r.post('/chat', requireAuth, async (req, res) => {
   try {
     if (String(model).startsWith('gemini/')) {
       const out = await gemini.generateText({ model: String(model).slice(7), messages: clean });
+      return res.json(out);
+    }
+    if (String(model).startsWith('antigravity/')) {
+      const out = await antigravity.generateText({ model: String(model).slice(12), messages: clean });
       return res.json(out);
     }
     const up = await fetch(`${CFG.museBase}/v1/chat/completions`, {

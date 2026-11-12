@@ -10,6 +10,7 @@ export default function GeminiStudio() {
   const toast = useToast();
   const inputRef = useRef(null);
   const [meta, setMeta] = useState(null);
+  const [provider, setProvider] = useState('gemini');
   const [tab, setTab] = useState('prompt');
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -29,17 +30,27 @@ export default function GeminiStudio() {
   useEffect(() => {
     api.geminiMeta().then((data) => {
       setMeta(data);
-      setTextModel(data.defaults?.text || data.models?.text?.[0]?.id || '');
-      setImageModel(data.defaults?.image || data.models?.image?.[0]?.id || '');
+      const nextProvider = data.defaultProvider || 'gemini';
+      const info = data.providers?.[nextProvider] || data;
+      setProvider(nextProvider);
+      setTextModel(info.defaults?.text || info.models?.text?.[0]?.id || '');
+      setImageModel(info.defaults?.image || info.models?.image?.[0]?.id || '');
     }).catch((e) => toast(e.message, 'error'));
   }, [toast]);
+
+  const switchProvider = (next) => {
+    const info = meta?.providers?.[next];
+    setProvider(next);
+    setTextModel(info?.defaults?.text || info?.models?.text?.[0]?.id || '');
+    setImageModel(info?.defaults?.image || info?.models?.image?.[0]?.id || '');
+  };
 
   const generatePrompt = async () => {
     if (keywords.trim().length < 2) return toast('先输入关键词或具体需求', 'error');
     setBusy(true);
     try {
       const out = await api.generatePrompt({
-        keywords, template, style, duration, aspectRatio: ratio, model: textModel,
+        provider, keywords, template, style, duration, aspectRatio: ratio, model: textModel,
       });
       setResult(out.content || '');
       setImagePrompt(out.content || keywords);
@@ -64,7 +75,7 @@ export default function GeminiStudio() {
     setBusy(true);
     try {
       const out = await api.createImage({
-        provider: 'gemini', model: imageModel, prompt: imagePrompt,
+        provider, model: imageModel, prompt: imagePrompt,
         size: ratio, resolution, images: refs.map((item) => item.url),
       });
       setImageJob(out.job);
@@ -78,20 +89,22 @@ export default function GeminiStudio() {
     catch { toast('复制失败', 'error'); }
   };
 
-  const textModels = meta?.models?.text || [];
-  const imageModels = meta?.models?.image || [];
+  const providerInfo = meta?.providers?.[provider] || meta;
+  const textModels = providerInfo?.models?.text || [];
+  const imageModels = providerInfo?.models?.image || [];
+  const availableProviders = Object.values(meta?.providers || {}).filter((item) => item.enabled);
 
   return (
     <div className="mx-auto max-w-7xl p-5 lg:p-7">
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="eyebrow">Gemini · Creative Copilot</p>
-          <h1 className="mt-1 text-2xl font-semibold text-white">Gemini 创作台</h1>
+          <p className="eyebrow">AI · Creative Copilot</p>
+          <h1 className="mt-1 text-2xl font-semibold text-white">AI 创作台</h1>
           <p className="mt-1 text-[12.5px] text-mist-400">关键词扩写专业视频提示词，并用参考图生成统一人物形象。</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {meta?.realismEnabled && <Badge tone="brand">真实拍摄模式</Badge>}
-          <Badge tone={meta?.enabled ? 'ok' : 'warn'}>{meta?.enabled ? 'Gemini 已连接' : '等待管理员配置'}</Badge>
+          <Badge tone={meta?.enabled ? 'ok' : 'warn'}>{meta?.enabled ? `${providerInfo?.name || 'AI'} 已连接` : '等待管理员配置'}</Badge>
         </div>
       </div>
 
@@ -103,15 +116,27 @@ export default function GeminiStudio() {
         ))}
       </div>
 
+      {meta?.enabled && (
+        <div className="card mb-4 flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <div>
+            <p className="text-[12.5px] font-medium text-mist-200">生成服务</p>
+            <p className="mt-0.5 text-[11px] text-mist-400">管理员可同时启用官方 Gemini 与 Antigravity，生成时自由切换。</p>
+          </div>
+          <Select className="min-w-52" value={provider} onChange={(e) => switchProvider(e.target.value)}>
+            {availableProviders.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </Select>
+        </div>
+      )}
+
       {!meta?.enabled ? (
         <div className="card grid min-h-64 place-items-center p-8 text-center">
-          <div><Bot size={30} className="mx-auto text-amber-300" /><p className="mt-3 text-mist-200">Gemini 尚未启用</p><p className="mt-1 text-[12px] text-mist-400">请管理员进入“管理员 → 设置”填写官方 API Key 并测试连接。</p></div>
+          <div><Bot size={30} className="mx-auto text-amber-300" /><p className="mt-3 text-mist-200">AI Provider 尚未启用</p><p className="mt-1 text-[12px] text-mist-400">请管理员进入“管理员 → 设置”，配置 Gemini 官方 API 或 Antigravity Provider。</p></div>
         </div>
       ) : tab === 'prompt' ? (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,430px)_1fr]">
           <section className="card space-y-4 p-5">
             <Field label="关键词或需求"><Textarea rows={7} value={keywords} onChange={(e) => setKeywords(e.target.value)} placeholder="例如：中国女生、夜晚街头、冷脸、手机自拍、10秒" /></Field>
-            <Field label="优质模板（可选）" hint="Gemini 学习模板的结构和专业程度，不会机械照抄。"><Textarea rows={8} value={template} onChange={(e) => setTemplate(e.target.value)} placeholder="粘贴你已有的优质提示词模板…" /></Field>
+            <Field label="优质模板（可选）" hint="AI 会学习模板的结构和专业程度，不会机械照抄。"><Textarea rows={8} value={template} onChange={(e) => setTemplate(e.target.value)} placeholder="粘贴你已有的优质提示词模板…" /></Field>
             <Field label="风格"><Input value={style} onChange={(e) => setStyle(e.target.value)} /></Field>
             <div className="grid grid-cols-3 gap-3">
               <Field label="时长"><Select value={duration} onChange={(e) => setDuration(Number(e.target.value))}>{[5, 8, 10, 15].map((n) => <option key={n} value={n}>{n}秒</option>)}</Select></Field>
@@ -134,7 +159,7 @@ export default function GeminiStudio() {
             <div className="grid grid-cols-3 gap-3"><Field label="比例"><Select value={ratio} onChange={(e) => setRatio(e.target.value)}>{RATIOS.map((x) => <option key={x}>{x}</option>)}</Select></Field><Field label="清晰度"><Select value={resolution} onChange={(e) => setResolution(e.target.value)}>{['1K', '2K', '4K'].map((x) => <option key={x}>{x}</option>)}</Select></Field><Field label="模型"><Select value={imageModel} onChange={(e) => setImageModel(e.target.value)}>{imageModels.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}</Select></Field></div>
             <Button className="w-full" loading={busy} onClick={generateImage}><Sparkles size={14} /> 生成人物图</Button>
           </section>
-          <section className="card grid min-h-[620px] place-items-center overflow-hidden p-5">{imageJob?.mediaUrl ? <div className="w-full"><img src={imageJob.mediaUrl} alt="Gemini 生成人物" className="mx-auto max-h-[70vh] rounded-xl object-contain" /><div className="mt-3 flex justify-center gap-2"><a href={imageJob.mediaUrl} download><Button variant="outline">下载图片</Button></a><Button variant="soft" onClick={() => { localStorage.setItem('reelgraph_canvas_import', JSON.stringify({ url: imageJob.mediaUrl, prompt: imagePrompt, at: Date.now() })); window.location.assign('/canvas'); }}>放入无限画布</Button></div></div> : <div className="text-center text-mist-400"><ImagePlus size={30} className="mx-auto mb-3 text-brand-400/60" /><p className="text-[13px]">生成结果会显示在这里</p><p className="mt-1 text-[11px]">参考图越清晰，人物脸部和服装越稳定</p></div>}</section>
+          <section className="card grid min-h-[620px] place-items-center overflow-hidden p-5">{imageJob?.mediaUrl ? <div className="w-full"><img src={imageJob.mediaUrl} alt="AI 生成人物" className="mx-auto max-h-[70vh] rounded-xl object-contain" /><div className="mt-3 flex justify-center gap-2"><a href={imageJob.mediaUrl} download><Button variant="outline">下载图片</Button></a><Button variant="soft" onClick={() => { localStorage.setItem('reelgraph_canvas_import', JSON.stringify({ url: imageJob.mediaUrl, prompt: imagePrompt, provider, at: Date.now() })); window.location.assign('/canvas'); }}>放入无限画布</Button></div></div> : <div className="text-center text-mist-400"><ImagePlus size={30} className="mx-auto mb-3 text-brand-400/60" /><p className="text-[13px]">生成结果会显示在这里</p><p className="mt-1 text-[11px]">参考图越清晰，人物脸部和服装越稳定</p></div>}</section>
         </div>
       )}
     </div>

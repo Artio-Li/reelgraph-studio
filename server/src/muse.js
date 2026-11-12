@@ -111,8 +111,32 @@ export async function queryQuota(upstreamId) {
 }
 
 /* ------------------------------ 视频 ------------------------------ */
+export const REFERENCE_PRIORITY_INSTRUCTION = [
+  '【参考图优先硬性规则】',
+  '本任务带有本次上传的参考图片。人物与主体的脸部、五官、发型、发色、服装、配饰、体型及其他可见外观，必须以本次上传的参考图为最高优先级。',
+  '如果正文中的人物或外观描述与参考图冲突，忽略冲突的文字并严格遵循参考图；不得因冲突而分析、改写、反问或只返回文字，请直接生成视频媒体。',
+].join('');
+
+function hasReferenceImages(images) {
+  return Array.isArray(images) && images.some((item) => {
+    if (typeof item === 'string') return item.trim().length > 0;
+    return Boolean(item && typeof item === 'object' && String(item.url || '').trim());
+  });
+}
+
+export function prepareVideoPayload(payload = {}) {
+  const next = { ...payload };
+  if (!hasReferenceImages(payload.images)) return next;
+
+  const prompt = String(payload.prompt || '').trim();
+  next.prompt = prompt.startsWith(REFERENCE_PRIORITY_INSTRUCTION)
+    ? prompt
+    : `${REFERENCE_PRIORITY_INSTRUCTION}\n\n${prompt}`;
+  return next;
+}
+
 export async function createVideo(payload) {
-  return call('/v1/videos', { method: 'POST', body: payload, timeout: 120_000 });
+  return call('/v1/videos', { method: 'POST', body: prepareVideoPayload(payload), timeout: 120_000 });
 }
 
 export async function getVideo(id) {

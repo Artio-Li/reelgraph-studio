@@ -219,6 +219,14 @@ function Inspector({ node, updateNode, removeNode, uploadBusy, onUpload, onRun, 
   }
   const data = node.data || {};
   const patch = (next) => updateNode(node.id, next);
+  const provider = data.provider || geminiMeta?.defaultProvider || 'gemini';
+  const providerInfo = geminiMeta?.providers?.[provider] || geminiMeta;
+  const providers = Object.values(geminiMeta?.providers || {}).filter((item) => item.enabled);
+  const switchProvider = (next) => {
+    const info = geminiMeta?.providers?.[next];
+    const kind = node.type === 'geminiImage' ? 'image' : 'text';
+    patch({ provider: next, model: info?.defaults?.[kind] || info?.models?.[kind]?.[0]?.id || '' });
+  };
   return (
     <div className="space-y-4 px-4 py-4">
       <label className="block text-[11px] text-mist-300">
@@ -244,6 +252,9 @@ function Inspector({ node, updateNode, removeNode, uploadBusy, onUpload, onRun, 
       )}
       {node.type === 'geminiPrompt' && (
         <>
+          <label className="block text-[11px] text-mist-300">生成服务
+            <select value={provider} onChange={(e) => switchProvider(e.target.value)} className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-2 text-[12px]">{providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+          </label>
           <label className="block text-[11px] text-mist-300">关键词 / 需求
             <textarea value={data.keywords || ''} onChange={(e) => patch({ keywords: e.target.value })} rows={6} className="mt-1.5 w-full resize-y rounded-lg border border-ink-600 bg-ink-900 px-3 py-2 text-[12px] leading-relaxed outline-none focus:border-brand-500" placeholder="人物、场景、动作、风格…" />
           </label>
@@ -259,7 +270,7 @@ function Inspector({ node, updateNode, removeNode, uploadBusy, onUpload, onRun, 
             </label>
           </div>
           <label className="block text-[11px] text-mist-300">文本模型
-            <select value={data.model || geminiMeta?.defaults?.text || ''} onChange={(e) => patch({ model: e.target.value })} className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-2 text-[12px]">{(geminiMeta?.models?.text || []).map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}</select>
+            <select value={data.model || providerInfo?.defaults?.text || ''} onChange={(e) => patch({ model: e.target.value })} className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-2 text-[12px]">{(providerInfo?.models?.text || []).map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}</select>
           </label>
           {data.content && <label className="block text-[11px] text-mist-300">生成结果<textarea value={data.content} onChange={(e) => patch({ content: e.target.value })} rows={10} className="mt-1.5 w-full resize-y rounded-lg border border-ink-600 bg-ink-900 px-3 py-2 text-[12px] leading-relaxed outline-none focus:border-brand-500" /></label>}
           <button onClick={() => onRunAi(node)} disabled={aiBusy || !geminiMeta?.enabled} className="flex w-full items-center justify-center gap-2 rounded-lg brand-gradient px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">{aiBusy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />} 生成提示词</button>
@@ -267,6 +278,9 @@ function Inspector({ node, updateNode, removeNode, uploadBusy, onUpload, onRun, 
       )}
       {node.type === 'geminiImage' && (
         <>
+          <label className="block text-[11px] text-mist-300">生成服务
+            <select value={provider} onChange={(e) => switchProvider(e.target.value)} className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-2 text-[12px]">{providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+          </label>
           <label className="block text-[11px] text-mist-300">节点内补充描述（可选）
             <textarea value={data.prompt || ''} onChange={(e) => patch({ prompt: e.target.value })} rows={5} className="mt-1.5 w-full resize-y rounded-lg border border-ink-600 bg-ink-900 px-3 py-2 text-[12px] leading-relaxed outline-none focus:border-brand-500" placeholder="可连接文本节点，也可以在这里补充" />
           </label>
@@ -274,7 +288,7 @@ function Inspector({ node, updateNode, removeNode, uploadBusy, onUpload, onRun, 
             <label className="text-[11px] text-mist-300">比例<select value={data.size || '9:16'} onChange={(e) => patch({ size: e.target.value })} className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-2 text-[12px]">{['9:16', '16:9', '1:1', '3:4', '4:3'].map((s) => <option key={s}>{s}</option>)}</select></label>
             <label className="text-[11px] text-mist-300">清晰度<select value={data.resolution || '1K'} onChange={(e) => patch({ resolution: e.target.value })} className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-2 text-[12px]">{['1K', '2K', '4K'].map((s) => <option key={s}>{s}</option>)}</select></label>
           </div>
-          <label className="block text-[11px] text-mist-300">图片模型<select value={data.model || geminiMeta?.defaults?.image || ''} onChange={(e) => patch({ model: e.target.value })} className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-2 text-[12px]">{(geminiMeta?.models?.image || []).map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}</select></label>
+          <label className="block text-[11px] text-mist-300">图片模型<select value={data.model || providerInfo?.defaults?.image || ''} onChange={(e) => patch({ model: e.target.value })} className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-2 text-[12px]">{(providerInfo?.models?.image || []).map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}</select></label>
           {data.url && <img src={data.url} alt="生成结果" className="max-h-52 w-full rounded-lg bg-black/30 object-contain" />}
           <button onClick={() => onRunAi(node)} disabled={aiBusy || !geminiMeta?.enabled} className="flex w-full items-center justify-center gap-2 rounded-lg brand-gradient px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">{aiBusy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />} 生成人物图</button>
           <p className="text-[10px] leading-relaxed text-mist-400">将文本连到上方端口、参考图连到下方端口。生成结果可继续连接“角色参考”或“视频生成”。</p>
@@ -446,7 +460,11 @@ export default function Canvas() {
       localStorage.removeItem(IMPORT_KEY);
       const node = {
         id: newId(), type: 'geminiImage', position: { x: 280, y: 180 },
-        data: { label: 'Gemini 人物图', url: imported.url, prompt: imported.prompt || '', size: '9:16', resolution: '1K', model: geminiMeta?.defaults?.image || '' },
+        data: {
+          label: 'AI 人物图', url: imported.url, prompt: imported.prompt || '', size: '9:16', resolution: '1K',
+          provider: imported.provider || geminiMeta?.defaultProvider || 'gemini',
+          model: geminiMeta?.providers?.[imported.provider || geminiMeta?.defaultProvider]?.defaults?.image || geminiMeta?.defaults?.image || '',
+        },
       };
       setNodes((current) => [...current, node]);
       setSelectedIds([node.id]);
@@ -519,8 +537,8 @@ export default function Canvas() {
     const defaults = {
       text: { label: '文本提示词', content: '' },
       image: { label: '参考图片', url: '' },
-      geminiPrompt: { label: 'Gemini 提示词', keywords: '', template: '', content: '', duration: 10, size: '9:16', model: geminiMeta?.defaults?.text || '' },
-      geminiImage: { label: 'Gemini 人物图', prompt: '', url: '', size: '9:16', resolution: '1K', model: geminiMeta?.defaults?.image || '' },
+      geminiPrompt: { label: 'AI 提示词', keywords: '', template: '', content: '', duration: 10, size: '9:16', provider: geminiMeta?.defaultProvider || 'gemini', model: geminiMeta?.defaults?.text || '' },
+      geminiImage: { label: 'AI 人物图', prompt: '', url: '', size: '9:16', resolution: '1K', provider: geminiMeta?.defaultProvider || 'gemini', model: geminiMeta?.defaults?.image || '' },
       character: { label: '角色参考' },
       video: { label: '视频生成', prompt: '', duration: 5, size: '16:9' },
       storyboard: { label: '分镜板' },
@@ -554,20 +572,24 @@ export default function Canvas() {
   };
 
   const runAiNode = async (node) => {
-    if (!geminiMeta?.enabled) return toast('请管理员先配置并启用 Gemini', 'error');
+    if (!geminiMeta?.enabled) return toast('请管理员先配置并启用 AI Provider', 'error');
     setAiBusy(true);
     try {
+      const provider = node.data?.provider || geminiMeta.defaultProvider || 'gemini';
+      const providerInfo = geminiMeta.providers?.[provider] || geminiMeta;
+      if (!providerInfo?.enabled && geminiMeta.providers) throw new Error('当前节点选择的 Provider 未启用');
       if (node.type === 'geminiPrompt') {
         const out = await api.generatePrompt({
+          provider,
           keywords: node.data?.keywords,
           template: node.data?.template,
           duration: node.data?.duration || 10,
           aspectRatio: node.data?.size || '9:16',
           style: node.data?.style || '写实真人质感，真实物理光学表现',
-          model: node.data?.model || geminiMeta.defaults?.text,
+          model: node.data?.model || providerInfo.defaults?.text,
         });
-        updateNode(node.id, { content: out.content, model: out.model });
-        toast('Gemini 提示词已生成', 'ok');
+        updateNode(node.id, { content: out.content, model: out.model, provider });
+        toast(`${providerInfo.name || 'AI'} 提示词已生成`, 'ok');
         return;
       }
       if (node.type === 'geminiImage') {
@@ -583,14 +605,14 @@ export default function Canvas() {
           const source = nodes.find((item) => item.id === edge.source);
           return source?.data?.url;
         }).filter(Boolean);
-        if (!window.confirm(`将调用 Gemini 生成 1 张 ${node.data?.resolution || '1K'} 人物图，并扣除图片积分。继续吗？`)) return;
+        if (!window.confirm(`将调用 ${providerInfo.name || 'AI'} 生成 1 张 ${node.data?.resolution || '1K'} 人物图，并扣除图片积分。继续吗？`)) return;
         const out = await api.createImage({
-          provider: 'gemini', model: node.data?.model || geminiMeta.defaults?.image,
+          provider, model: node.data?.model || providerInfo.defaults?.image,
           prompt, images, size: node.data?.size || '9:16', resolution: node.data?.resolution || '1K',
         });
-        updateNode(node.id, { url: out.job?.mediaUrl, jobId: out.job?.id, prompt, model: out.job?.params?.model || node.data?.model });
+        updateNode(node.id, { url: out.job?.mediaUrl, jobId: out.job?.id, prompt, provider, model: out.job?.params?.model || node.data?.model });
         refresh();
-        toast('Gemini 人物图已生成', 'ok');
+        toast(`${providerInfo.name || 'AI'} 人物图已生成`, 'ok');
       }
     } catch (error) {
       toast(error.message, 'error');

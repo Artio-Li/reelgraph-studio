@@ -511,6 +511,8 @@ function SettingsPanel() {
   const [saving, setSaving] = useState(false);
   const [testingGemini, setTestingGemini] = useState(false);
   const [geminiModels, setGeminiModels] = useState(null);
+  const [testingAntigravity, setTestingAntigravity] = useState(false);
+  const [antigravityModels, setAntigravityModels] = useState(null);
 
   useEffect(() => {
     api.adminSettings().then((r) => setSettings(r.settings)).catch((e) => toast(e.message, 'error'));
@@ -546,6 +548,21 @@ function SettingsPanel() {
     }
   };
 
+  const testAntigravity = async () => {
+    setTestingAntigravity(true);
+    try {
+      const saved = await api.adminSaveSettings(settings);
+      setSettings(saved.settings);
+      const out = await api.adminTestAntigravity();
+      setAntigravityModels(out.models);
+      toast(`Antigravity 连接成功：${out.counts.text} 个文本模型，${out.counts.image} 个图片模型`, 'ok');
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      setTestingAntigravity(false);
+    }
+  };
+
   if (!settings) return <div className="grid place-items-center py-24 text-brand-400"><Spinner size={20} /></div>;
 
   return (
@@ -575,6 +592,78 @@ function SettingsPanel() {
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <h3 className="flex items-center gap-2 text-[13.5px] font-semibold text-mist-200">
+              <Zap size={14} className="text-violet-400" /> Antigravity Provider
+            </h3>
+            <p className="mt-1 text-[11.5px] leading-5 text-ink-500">
+              连接 Antigravity Manager 的 OpenAI 兼容接口。Key 只加密保存在服务端，普通用户无法查看。
+            </p>
+          </div>
+          <Badge tone={settings.antigravityApiKeyConfigured ? 'ok' : 'warn'}>
+            {settings.antigravityApiKeyConfigured ? 'Key 已配置' : '未配置'}
+          </Badge>
+        </div>
+        <div className="space-y-3.5">
+          <Field label="启用 Antigravity">
+            <Select value={settings.antigravityEnabled || '0'} onChange={set('antigravityEnabled')}>
+              <option value="1">启用</option>
+              <option value="0">停用</option>
+            </Select>
+          </Field>
+          <Field
+            label="服务地址"
+            hint="填写 Antigravity Manager 可被 ReelGraph 服务器访问的地址；末尾有无 /v1 都可以。若 Antigravity 在你本机，公网服务器不能使用 localhost。"
+          >
+            <Input
+              value={settings.antigravityBaseUrl || ''}
+              onChange={set('antigravityBaseUrl')}
+              placeholder="例如：https://antigravity.example.com 或 http://host.docker.internal:8045"
+            />
+          </Field>
+          <Field label="Antigravity API Key" hint={settings.antigravityApiKeyConfigured ? '留空表示保留当前 Key；输入新 Key 会覆盖。' : '填写 Antigravity Manager 中配置的 API Key。'}>
+            <Input
+              type="password"
+              autoComplete="new-password"
+              value={settings.antigravityApiKey || ''}
+              onChange={(e) => setSettings((s) => ({ ...s, antigravityApiKey: e.target.value, clearAntigravityApiKey: false }))}
+              placeholder={settings.antigravityApiKeyConfigured ? '••••••••••••（已保存）' : 'sk-...'}
+            />
+          </Field>
+          <div className="grid gap-3.5 sm:grid-cols-2">
+            <Field label="默认提示词模型">
+              {antigravityModels?.text?.length ? (
+                <Select value={settings.antigravityTextModel} onChange={set('antigravityTextModel')}>
+                  {antigravityModels.text.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
+                </Select>
+              ) : <Input value={settings.antigravityTextModel || ''} onChange={set('antigravityTextModel')} />}
+            </Field>
+            <Field label="默认人物图模型">
+              {antigravityModels?.image?.length ? (
+                <Select value={settings.antigravityImageModel} onChange={set('antigravityImageModel')}>
+                  {antigravityModels.image.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
+                </Select>
+              ) : <Input value={settings.antigravityImageModel || ''} onChange={set('antigravityImageModel')} />}
+            </Field>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" loading={testingAntigravity} onClick={testAntigravity}>
+              <RefreshCw size={13} /> 测试连接并加载模型
+            </Button>
+            {settings.antigravityApiKeyConfigured && (
+              <Button
+                variant="danger"
+                onClick={() => setSettings((s) => ({ ...s, clearAntigravityApiKey: true, antigravityApiKey: '', antigravityApiKeyConfigured: false }))}
+              >
+                清除 Key
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="card p-5">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="flex items-center gap-2 text-[13.5px] font-semibold text-mist-200">
               <Sparkles size={14} className="text-brand-400" /> 全局生成风格
             </h3>
             <p className="mt-1 text-[11.5px] leading-5 text-ink-500">
@@ -585,7 +674,7 @@ function SettingsPanel() {
             {(settings.realismEnabled ?? '1') === '1' ? '已开启' : '已关闭'}
           </Badge>
         </div>
-        <Field label="真实拍摄 / 去 AI 感" hint="作用于 Gemini 提示词、Gemini/Muse 图片、Muse 视频、无限画布和自动队列。">
+        <Field label="真实拍摄 / 去 AI 感" hint="作用于 Gemini/Antigravity 提示词和图片、Muse 图片与视频、无限画布和自动队列。">
           <Select value={settings.realismEnabled ?? '1'} onChange={set('realismEnabled')}>
             <option value="1">开启：自动附加真实拍摄约束</option>
             <option value="0">关闭：完全使用用户原始提示词</option>

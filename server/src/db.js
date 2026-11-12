@@ -244,6 +244,10 @@ const DEFAULT_SETTINGS = {
   geminiEnabled: '0',
   geminiTextModel: 'gemini-2.5-flash',
   geminiImageModel: 'gemini-3.1-flash-image',
+  antigravityEnabled: '0',
+  antigravityBaseUrl: '',
+  antigravityTextModel: 'gemini-3-flash',
+  antigravityImageModel: 'gemini-3-pro-image',
 };
 
 export function getSettings() {
@@ -290,7 +294,7 @@ export function getSecretSetting(key) {
     decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
     return Buffer.concat([decipher.update(Buffer.from(dataB64, 'base64')), decipher.final()]).toString('utf8');
   } catch {
-    throw new Error('Gemini API Key 无法解密，请管理员重新保存');
+    throw new Error('AI Provider API Key 无法解密，请管理员重新保存');
   }
 }
 

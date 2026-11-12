@@ -5,6 +5,7 @@ import {
 } from '../db.js';
 import * as muse from '../muse.js';
 import * as gemini from '../gemini.js';
+import * as antigravity from '../antigravity.js';
 
 const r = Router();
 r.use(requireAuth, requireAdmin);
@@ -100,7 +101,9 @@ r.get('/trend', (_req, res) => {
 function safeSettings() {
   const settings = { ...getSettings() };
   delete settings.geminiApiKey;
+  delete settings.antigravityApiKey;
   settings.geminiApiKeyConfigured = !!getSecretSetting('geminiApiKey');
+  settings.antigravityApiKeyConfigured = !!getSecretSetting('antigravityApiKey');
   return settings;
 }
 
@@ -109,6 +112,7 @@ r.patch('/settings', (req, res) => {
   const allow = [
     'siteName', 'signupCredits', 'priceVideoBase', 'priceVideoPerSecond', 'priceImage',
     'allowRegister', 'notice', 'realismEnabled', 'geminiEnabled', 'geminiTextModel', 'geminiImageModel',
+    'antigravityEnabled', 'antigravityBaseUrl', 'antigravityTextModel', 'antigravityImageModel',
   ];
   for (const [k, v] of Object.entries(req.body || {})) {
     if (allow.includes(k)) setSetting(k, v);
@@ -116,6 +120,10 @@ r.patch('/settings', (req, res) => {
   const newGeminiKey = typeof req.body?.geminiApiKey === 'string' ? req.body.geminiApiKey.trim() : '';
   if (newGeminiKey) setSecretSetting('geminiApiKey', newGeminiKey);
   else if (req.body?.clearGeminiApiKey === true) setSecretSetting('geminiApiKey', '');
+  const newAntigravityKey = typeof req.body?.antigravityApiKey === 'string'
+    ? req.body.antigravityApiKey.trim() : '';
+  if (newAntigravityKey) setSecretSetting('antigravityApiKey', newAntigravityKey);
+  else if (req.body?.clearAntigravityApiKey === true) setSecretSetting('antigravityApiKey', '');
   res.json({ settings: safeSettings() });
 });
 
@@ -125,6 +133,15 @@ r.post('/gemini/test', async (_req, res) => {
     res.json({ ok: true, models, counts: { text: models.text.length, image: models.image.length } });
   } catch (error) {
     res.status(error.status || 502).json({ error: `Gemini 连接失败：${error.message}` });
+  }
+});
+
+r.post('/antigravity/test', async (_req, res) => {
+  try {
+    const models = await antigravity.listModels({ force: true });
+    res.json({ ok: true, models, counts: { text: models.text.length, image: models.image.length } });
+  } catch (error) {
+    res.status(error.status || 502).json({ error: `Antigravity 连接失败：${error.message}` });
   }
 });
 

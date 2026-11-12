@@ -87,6 +87,7 @@ export const api = {
   adminSettings: () => request('/api/admin/settings'),
   adminSaveSettings: (b) => request('/api/admin/settings', { method: 'PATCH', body: b }),
   adminTestGemini: () => request('/api/admin/gemini/test', { method: 'POST' }),
+  adminTestAntigravity: () => request('/api/admin/antigravity/test', { method: 'POST' }),
   adminSystem: () => request('/api/admin/system'),
   adminKeepalive: () => request('/api/admin/keepalive', { method: 'POST' }),
   adminOrders: (kind) => request(`/api/admin/orders${kind ? `?kind=${kind}` : ''}`),

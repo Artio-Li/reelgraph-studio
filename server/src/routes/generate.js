@@ -9,6 +9,7 @@ import {
 } from '../db.js';
 import * as muse from '../muse.js';
 import * as gemini from '../gemini.js';
+import * as antigravity from '../antigravity.js';
 import { applyRealism, realismEnabled } from '../realism.js';
 
 const r = Router();
@@ -135,7 +136,7 @@ r.post('/images', requireAuth, async (req, res) => {
   }
   const params = {
     size: CFG.sizes.includes(size) ? size : '1:1', images,
-    provider: provider === 'gemini' ? 'gemini' : 'muse', model, resolution,
+    provider: ['gemini', 'antigravity'].includes(provider) ? provider : 'muse', model, resolution,
     realism: realismEnabled(),
   };
   const cost = priceOf('image', params);
@@ -150,8 +151,9 @@ r.post('/images', requireAuth, async (req, res) => {
 
   try {
     const refs = normalizeRefs(images);
-    if (params.provider === 'gemini') {
-      const out = await gemini.generateImage({
+    if (['gemini', 'antigravity'].includes(params.provider)) {
+      const target = params.provider === 'antigravity' ? antigravity : gemini;
+      const out = await target.generateImage({
         prompt: applyRealism(prompt, 'image'), model, size: params.size, resolution, images: refs, jobId: job.id,
       });
       updateJob(job.id, {
