@@ -9,6 +9,9 @@ import {
 } from '../db.js';
 import * as muse from '../muse.js';
 import { applyRealism, realismEnabled } from '../realism.js';
+import {
+  CONTINUATION_INSTRUCTION, continuationReferences, mergeVideoClips,
+} from '../canvasMedia.js';
 
 const r = Router();
 const UPLOAD_DIR = path.join(CFG.dataDir, 'uploads');
@@ -32,8 +35,13 @@ const ALLOWED_LINKS = new Set([
   'geminiPrompt:text>geminiImage:prompt',
   'geminiPrompt:text>video:prompt',
   'image:image>geminiImage:ref',
+  'video:video>video:continuation',
   'video:video>storyboard:clip',
 ]);
+
+const ACTIVE_RUN = new Set(['queued', 'submitting', 'waiting', 'processing']);
+const advancingRuns = new Set();
+let schedulerTimer = null;
 
 function parseJson(value, fallback) {
   try { return JSON.parse(value); } catch { return fallback; }
@@ -113,6 +121,7 @@ function validateGraph(doc) {
   const byId = new Map(doc.nodes.map((node) => [node.id, node]));
   const outgoing = new Map(doc.nodes.map((node) => [node.id, []]));
   const seen = new Set();
+  const continuationTargets = new Set();
   for (const edge of doc.edges) {
     const source = byId.get(edge.source);
     const target = byId.get(edge.target);
@@ -123,6 +132,12 @@ function validateGraph(doc) {
     const duplicate = `${edge.source}:${edge.sourceHandle}:${edge.target}:${edge.targetHandle}`;
     if (seen.has(duplicate)) throw Object.assign(new Error('画布存在重复连线'), { status: 400 });
     seen.add(duplicate);
+    if (edge.targetHandle === 'continuation') {
+      if (continuationTargets.has(edge.target)) {
+        throw Object.assign(new Error('每个视频节点只能接入一个“续集参考”视频'), { status: 400 });
+      }
+      continuationTargets.add(edge.target);
+    }
     outgoing.get(edge.source).push(edge.target);
   }
 
@@ -217,9 +232,11 @@ function resolveVideoInput(doc, byId, node, userId) {
 
   const duration = CFG.videoDurations.includes(Number(node.data?.duration)) ? Number(node.data.duration) : 5;
   const size = CFG.sizes.includes(node.data?.size) ? node.data.size : '16:9';
+  const continuationEdges = inputEdges(doc, node.id, 'continuation');
+  const continuationFrom = continuationEdges[0]?.source || null;
   const input = {
     prompt: applyRealism(prompt, 'video'), images, duration, size, model: 'muse-video',
-    realism: realismEnabled(),
+    realism: realismEnabled(), continuationFrom,
   };
   const inputHash = crypto.createHash('sha256').update(JSON.stringify(input)).digest('hex');
   return { input, inputHash, cost: priceOf('video', input) };
@@ -228,18 +245,36 @@ function resolveVideoInput(doc, byId, node, userId) {
 function planRun(canvasRow, userId, { targetNodeIds = [], force = false } = {}) {
   const doc = cleanDoc(parseJson(canvasRow.doc_json, defaultDoc()));
   const byId = validateGraph(doc);
-  const targets = Array.isArray(targetNodeIds) && targetNodeIds.length
+  const requested = Array.isArray(targetNodeIds) && targetNodeIds.length
     ? [...new Set(targetNodeIds)]
     : doc.nodes.filter((node) => node.type === 'video').map((node) => node.id);
-  if (!targets.length) throw Object.assign(new Error('画布中还没有视频节点'), { status: 400 });
+  if (!requested.length) throw Object.assign(new Error('画布中还没有视频节点'), { status: 400 });
 
-  const items = targets.map((nodeId) => {
+  const selected = new Set();
+  const includeAncestors = (nodeId) => {
     const node = byId.get(nodeId);
     if (!node || node.type !== 'video') throw Object.assign(new Error('运行目标不是视频节点'), { status: 400 });
+    if (selected.has(nodeId)) return;
+    for (const edge of inputEdges(doc, nodeId, 'continuation')) includeAncestors(edge.source);
+    selected.add(nodeId);
+  };
+  requested.forEach(includeAncestors);
+
+  const items = [];
+  const emitted = new Set();
+  const emit = (nodeId) => {
+    if (emitted.has(nodeId) || !selected.has(nodeId)) return;
+    for (const edge of inputEdges(doc, nodeId, 'continuation')) emit(edge.source);
+    const node = byId.get(nodeId);
     const resolved = resolveVideoInput(doc, byId, node, userId);
-    const cached = force ? null : findCached(userId, canvasRow.id, node.id, resolved.inputHash);
-    return { node, ...resolved, cached };
-  });
+    // 续集的缓存必须同时绑定上一段实际媒体。为避免错误复用，续集节点始终重新生成。
+    const cached = force || resolved.input.continuationFrom
+      ? null
+      : findCached(userId, canvasRow.id, node.id, resolved.inputHash);
+    items.push({ node, ...resolved, cached });
+    emitted.add(nodeId);
+  };
+  selected.forEach(emit);
   return {
     items,
     force: !!force,
@@ -266,9 +301,13 @@ function insertNodeRun({ runId, canvasId, userId, item, status, jobId = null, ca
   return id;
 }
 
-function refreshRun(runId, userId) {
-  const run = db.prepare('SELECT * FROM canvas_runs WHERE id = ? AND user_id = ?').get(runId, userId);
-  if (!run) throw Object.assign(new Error('运行记录不存在'), { status: 404 });
+function refundJob(job, userId, reason) {
+  if (!job || job.refunded) return;
+  addCredits(userId, Number(job.cost || 0), reason, job.id);
+  updateJob(job.id, { refunded: 1 });
+}
+
+function syncNodeJobs(runId) {
   const rows = db.prepare('SELECT * FROM node_runs WHERE run_id = ? ORDER BY created_at').all(runId);
   for (const row of rows) {
     if (!row.job_id || !['queued', 'processing'].includes(row.status)) continue;
@@ -285,28 +324,116 @@ function refreshRun(runId, userId) {
       now(), terminal ? now() : null, row.id,
     );
   }
-  const fresh = db.prepare('SELECT * FROM node_runs WHERE run_id = ? ORDER BY created_at').all(runId);
-  const active = fresh.some((row) => ['queued', 'processing'].includes(row.status));
-  const failed = fresh.filter((row) => row.status === 'failed').length;
-  const completed = fresh.filter((row) => row.status === 'completed').length;
-  const actualCost = fresh.reduce((sum, row) => {
+}
+
+async function submitNodeRun(run, nodeRow, allRows) {
+  const job = getJob(nodeRow.job_id);
+  if (!job || job.upstreamId || !['queued', 'waiting'].includes(job.status)) return false;
+  const input = parseJson(nodeRow.input_json, {});
+  const payload = {
+    prompt: input.prompt,
+    model: input.model,
+    duration: input.duration,
+    size: input.size,
+  };
+  if (Array.isArray(input.images) && input.images.length) {
+    payload.images = input.images.map((url) => toReference(run.user_id, url));
+  }
+
+  if (input.continuationFrom) {
+    const previousRow = allRows.find((row) => row.node_id === input.continuationFrom);
+    if (!previousRow) throw new Error('续集依赖的上一段视频不在本次运行中');
+    if (previousRow.status === 'failed') {
+      const message = '上一段视频生成失败，本续集节点未执行';
+      updateJob(job.id, { status: 'failed', error: message, finished_at: now() });
+      refundJob(job, run.user_id, '续集依赖失败退还');
+      db.prepare("UPDATE node_runs SET status = 'failed', error = ?, updated_at = ?, finished_at = ? WHERE id = ?")
+        .run(message, now(), now(), nodeRow.id);
+      return false;
+    }
+    if (previousRow.status !== 'completed') return false;
+    const previousJob = getJob(previousRow.job_id);
+    if (!previousJob) throw new Error('上一段视频任务不存在，无法作为续集参考');
+    let mediaFile = previousJob.mediaFile;
+    if (!mediaFile && previousJob.result?.url) {
+      const landed = await muse.downloadMedia(previousJob.result.url, `${previousJob.id}-continuation`, 'video');
+      mediaFile = landed.fileName;
+      updateJob(previousJob.id, { media_file: mediaFile });
+    }
+    if (!mediaFile) throw new Error('上一段视频未保存到本地，无法作为续集参考');
+    const previousFile = path.join(MEDIA_DIR, mediaFile);
+    const references = await continuationReferences(previousFile);
+    payload.prompt = `${CONTINUATION_INSTRUCTION}\n\n【本段后续内容】\n${input.prompt}`;
+    payload.images = [references.lastFrame, ...(payload.images || [])];
+    payload.videos = [references.video];
+  }
+
+  const out = await muse.createVideo(payload);
+  const upstreamId = out?.id || out?.task_id;
+  if (!upstreamId) throw new Error('上游未返回任务 ID');
+  updateJob(job.id, { upstream_id: upstreamId, status: 'processing', progress: 15 });
+  db.prepare("UPDATE node_runs SET status = 'processing', updated_at = ? WHERE id = ?").run(now(), nodeRow.id);
+  return true;
+}
+
+function finalizeRun(runId) {
+  const run = db.prepare('SELECT * FROM canvas_runs WHERE id = ?').get(runId);
+  const rows = db.prepare('SELECT * FROM node_runs WHERE run_id = ? ORDER BY created_at').all(runId);
+  const active = rows.some((row) => ACTIVE_RUN.has(row.status));
+  const failed = rows.filter((row) => row.status === 'failed').length;
+  const completed = rows.filter((row) => row.status === 'completed').length;
+  const actualCost = rows.reduce((sum, row) => {
+    if (row.cached_from) return sum;
     const job = row.job_id ? getJob(row.job_id) : null;
     return sum + (job && !job.refunded ? Number(job.cost || 0) : 0);
   }, 0);
   let status = active ? 'processing' : failed && completed ? 'completed_with_errors' : failed ? 'failed' : 'completed';
-  if (!fresh.length) status = 'failed';
+  if (!rows.length) status = 'failed';
   if (status !== run.status || actualCost !== run.actual_cost) {
     db.prepare('UPDATE canvas_runs SET status = ?, actual_cost = ?, updated_at = ?, finished_at = ? WHERE id = ?')
       .run(status, actualCost, now(), active ? null : now(), runId);
   }
-  const finalRun = db.prepare('SELECT * FROM canvas_runs WHERE id = ?').get(runId);
-  return shapeRun(finalRun, fresh);
+  return shapeRun(db.prepare('SELECT * FROM canvas_runs WHERE id = ?').get(runId), rows);
+}
+
+async function advanceCanvasRun(runId, userId = null) {
+  const run = userId
+    ? db.prepare('SELECT * FROM canvas_runs WHERE id = ? AND user_id = ?').get(runId, userId)
+    : db.prepare('SELECT * FROM canvas_runs WHERE id = ?').get(runId);
+  if (!run) throw Object.assign(new Error('运行记录不存在'), { status: 404 });
+  if (advancingRuns.has(runId)) return finalizeRun(runId);
+  advancingRuns.add(runId);
+  try {
+    syncNodeJobs(runId);
+    let rows = db.prepare('SELECT * FROM node_runs WHERE run_id = ? ORDER BY created_at').all(runId);
+    for (const row of rows) {
+      if (!['queued', 'waiting'].includes(row.status)) continue;
+      try {
+        await submitNodeRun(run, row, rows);
+      } catch (error) {
+        const job = getJob(row.job_id);
+        const message = String(error.message || error).slice(0, 500);
+        if (job) {
+          updateJob(job.id, { status: 'failed', error: message, finished_at: now() });
+          refundJob(job, run.user_id, '画布任务创建失败退还');
+        }
+        db.prepare("UPDATE node_runs SET status = 'failed', error = ?, updated_at = ?, finished_at = ? WHERE id = ?")
+          .run(message, now(), now(), row.id);
+      }
+      rows = db.prepare('SELECT * FROM node_runs WHERE run_id = ? ORDER BY created_at').all(runId);
+    }
+    syncNodeJobs(runId);
+    return finalizeRun(runId);
+  } finally {
+    advancingRuns.delete(runId);
+  }
 }
 
 function shapeNodeRuns(nodeRows) {
   return nodeRows.map((row) => {
     const job = row.job_id ? getJob(row.job_id) : null;
     const output = parseJson(row.output_json, null);
+    const input = parseJson(row.input_json, {});
     return {
       id: row.id,
       nodeId: row.node_id,
@@ -317,6 +444,7 @@ function shapeNodeRuns(nodeRows) {
       progress: job?.progress || (row.status === 'completed' ? 100 : 0),
       mediaUrl: output?.mediaUrl || job?.mediaUrl || job?.result?.url || null,
       error: row.error || job?.error || null,
+      continuationFrom: input.continuationFrom || null,
     };
   });
 }
@@ -365,13 +493,13 @@ r.post('/', requireAuth, (req, res) => {
   res.status(201).json({ canvas: shapeCanvas(ownCanvas(id, req.user.id)) });
 });
 
-r.get('/:id', requireAuth, (req, res) => {
+r.get('/:id', requireAuth, async (req, res) => {
   const canvas = shapeCanvas(ownCanvas(req.params.id, req.user.id));
   const latest = db.prepare('SELECT id FROM canvas_runs WHERE canvas_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 1')
     .get(req.params.id, req.user.id);
   res.json({
     canvas,
-    latestRun: latest ? refreshRun(latest.id, req.user.id) : null,
+    latestRun: latest ? await advanceCanvasRun(latest.id, req.user.id) : null,
     nodeState: latestNodeState(req.params.id, req.user.id),
   });
 });
@@ -404,6 +532,47 @@ r.delete('/:id', requireAuth, (req, res) => {
     throw e;
   }
   res.json({ deleted: true, id: row.id });
+});
+
+r.post('/:id/storyboards/:nodeId/export', requireAuth, async (req, res) => {
+  const canvasRow = ownCanvas(req.params.id, req.user.id);
+  const doc = cleanDoc(parseJson(canvasRow.doc_json, defaultDoc()));
+  const byId = validateGraph(doc);
+  const board = byId.get(req.params.nodeId);
+  if (!board || board.type !== 'storyboard') {
+    return res.status(404).json({ error: '分镜板节点不存在' });
+  }
+  const clipEdges = inputEdges(doc, board.id, 'clip');
+  if (!clipEdges.length) return res.status(400).json({ error: '请先把视频节点按顺序连接到分镜板' });
+
+  const clips = [];
+  for (const edge of clipEdges) {
+    const source = byId.get(edge.source);
+    if (!source || source.type !== 'video') continue;
+    const nodeRun = db.prepare(
+      `SELECT * FROM node_runs
+       WHERE canvas_id = ? AND user_id = ? AND node_id = ? AND status = 'completed'
+       ORDER BY created_at DESC LIMIT 1`
+    ).get(canvasRow.id, req.user.id, source.id);
+    const job = nodeRun?.job_id ? getJob(nodeRun.job_id) : null;
+    if (!job?.mediaFile || !fs.existsSync(path.join(MEDIA_DIR, job.mediaFile))) {
+      return res.status(409).json({ error: `视频节点「${source.data?.label || source.id}」还没有可导出的成片` });
+    }
+    clips.push({ nodeId: source.id, label: source.data?.label || '视频片段', job, file: path.join(MEDIA_DIR, job.mediaFile) });
+  }
+  if (!clips.length) return res.status(400).json({ error: '分镜板没有可导出的视频片段' });
+
+  const filename = `storyboard-${Date.now()}-${crypto.randomBytes(5).toString('hex')}.mp4`;
+  const outputFile = path.join(MEDIA_DIR, filename);
+  const meta = await mergeVideoClips(clips.map((clip) => clip.file), outputFile);
+  res.status(201).json({
+    export: {
+      url: `/media/${filename}`,
+      filename,
+      bytes: meta.bytes,
+      clips: clips.map((clip) => ({ nodeId: clip.nodeId, label: clip.label, url: clip.job.mediaUrl })),
+    },
+  });
 });
 
 r.post('/:id/runs/preview', requireAuth, (req, res) => {
@@ -442,9 +611,6 @@ r.post('/:id/runs', requireAuth, async (req, res) => {
     plan.force ? 1 : 0, plan.estimatedCost, 0, ts, ts,
   );
 
-  let actualCost = 0;
-  let submitted = 0;
-  let failures = 0;
   for (const item of plan.items) {
     if (item.cached) {
       insertNodeRun({
@@ -458,52 +624,41 @@ r.post('/:id/runs', requireAuth, async (req, res) => {
     const job = createJob(req.user.id, 'video', item.input.prompt, {
       duration: item.input.duration, size: item.input.size, images: item.input.images,
       realism: item.input.realism,
+      continuationFrom: item.input.continuationFrom,
       canvasId: row.id, canvasRunId: runId, canvasNodeId: item.node.id,
     }, item.cost);
     addCredits(req.user.id, -item.cost, '画布视频节点', job.id);
-    const nodeRunId = insertNodeRun({
-      runId, canvasId: row.id, userId: req.user.id, item, status: 'queued', jobId: job.id,
+    const status = item.input.continuationFrom ? 'waiting' : 'queued';
+    if (status === 'waiting') updateJob(job.id, { status: 'waiting' });
+    insertNodeRun({
+      runId, canvasId: row.id, userId: req.user.id, item, status, jobId: job.id,
     });
-    try {
-      const payload = {
-        prompt: item.input.prompt,
-        model: item.input.model,
-        duration: item.input.duration,
-        size: item.input.size,
-      };
-      if (item.input.images.length) payload.images = item.input.images.map((url) => toReference(req.user.id, url));
-      const out = await muse.createVideo(payload);
-      const upstreamId = out?.id || out?.task_id;
-      if (!upstreamId) throw new Error('上游未返回任务 ID');
-      updateJob(job.id, { upstream_id: upstreamId, status: 'processing', progress: 15 });
-      db.prepare("UPDATE node_runs SET status = 'processing', updated_at = ? WHERE id = ?").run(now(), nodeRunId);
-      actualCost += item.cost;
-      submitted += 1;
-    } catch (e) {
-      updateJob(job.id, { status: 'failed', error: e.message, finished_at: now() });
-      addCredits(req.user.id, item.cost, '画布任务创建失败退还', job.id);
-      updateJob(job.id, { refunded: 1 });
-      db.prepare("UPDATE node_runs SET status = 'failed', error = ?, updated_at = ?, finished_at = ? WHERE id = ?")
-        .run(String(e.message).slice(0, 500), now(), now(), nodeRunId);
-      failures += 1;
-    }
   }
-  const status = submitted ? 'processing' : failures ? (failures === plan.items.length ? 'failed' : 'completed_with_errors') : 'completed';
-  db.prepare('UPDATE canvas_runs SET status = ?, actual_cost = ?, updated_at = ?, finished_at = ? WHERE id = ?')
-    .run(status, actualCost, now(), submitted ? null : now(), runId);
-  res.status(201).json({ run: refreshRun(runId, req.user.id) });
+  res.status(201).json({ run: await advanceCanvasRun(runId, req.user.id) });
 });
 
-r.get('/:id/runs', requireAuth, (req, res) => {
+r.get('/:id/runs', requireAuth, async (req, res) => {
   ownCanvas(req.params.id, req.user.id);
   const limit = Math.min(30, Math.max(1, Number(req.query.limit) || 10));
   const rows = db.prepare('SELECT * FROM canvas_runs WHERE canvas_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT ?')
     .all(req.params.id, req.user.id, limit);
-  res.json({ runs: rows.map((row) => refreshRun(row.id, req.user.id)) });
+  res.json({ runs: await Promise.all(rows.map((row) => advanceCanvasRun(row.id, req.user.id))) });
 });
 
-r.get('/runs/:runId/status', requireAuth, (req, res) => {
-  res.json({ run: refreshRun(req.params.runId, req.user.id) });
+r.get('/runs/:runId/status', requireAuth, async (req, res) => {
+  res.json({ run: await advanceCanvasRun(req.params.runId, req.user.id) });
 });
+
+export function startCanvasScheduler() {
+  if (schedulerTimer) return schedulerTimer;
+  const tick = async () => {
+    const runs = db.prepare("SELECT id FROM canvas_runs WHERE status IN ('queued','submitting','processing') ORDER BY created_at LIMIT 30").all();
+    await Promise.allSettled(runs.map((run) => advanceCanvasRun(run.id)));
+  };
+  schedulerTimer = setInterval(() => { tick().catch((error) => console.error('[canvas] 调度失败:', error.message)); }, 2500);
+  schedulerTimer.unref?.();
+  tick().catch((error) => console.error('[canvas] 初始调度失败:', error.message));
+  return schedulerTimer;
+}
 
 export default r;

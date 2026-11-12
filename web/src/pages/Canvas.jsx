@@ -6,7 +6,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import {
   Box, Film, Image as ImageIcon, LayoutGrid, Loader2, Play, Plus, RefreshCw,
-  Save, Sparkles, Trash2, Type, Upload, X, Bot, Wand2,
+  Save, Sparkles, Trash2, Type, Upload, X, Bot, Wand2, Download, SkipBack, SkipForward,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { api } from '../lib/api.js';
@@ -15,7 +15,7 @@ import { useToast } from '../components/ui.jsx';
 
 const LEGACY_KEY = 'xm_canvas_v1';
 const IMPORT_KEY = 'reelgraph_canvas_import';
-const ACTIVE = new Set(['queued', 'submitting', 'processing']);
+const ACTIVE = new Set(['queued', 'submitting', 'waiting', 'processing']);
 const LINK_RULES = new Set([
   'text:text>video:prompt',
   'image:image>video:ref',
@@ -27,6 +27,7 @@ const LINK_RULES = new Set([
   'geminiPrompt:text>geminiImage:prompt',
   'geminiPrompt:text>video:prompt',
   'image:image>geminiImage:ref',
+  'video:video>video:continuation',
   'video:video>storyboard:clip',
 ]);
 
@@ -83,7 +84,7 @@ function Status({ runtime }) {
       : 'text-brand-300 bg-brand-500/10';
   return (
     <span className={clsx('rounded px-1.5 py-0.5 text-[9px]', tone)}>
-      {runtime.cached ? '缓存' : runtime.status === 'completed' ? '完成' : runtime.status === 'failed' ? '失败' : `${runtime.progress || 0}%`}
+      {runtime.cached ? '缓存' : runtime.status === 'completed' ? '完成' : runtime.status === 'failed' ? '失败' : runtime.status === 'waiting' ? '等待上一段' : `${runtime.progress || 0}%`}
     </span>
   );
 }
@@ -178,27 +179,30 @@ function VideoNode({ data }) {
       ) : (
         <div className="grid h-28 place-items-center bg-black/20 text-center text-[10px] text-mist-400">
           {runtime && ACTIVE.has(runtime.status)
-            ? <span><Loader2 size={16} className="mx-auto mb-2 animate-spin text-brand-400" />正在生成 {runtime.progress || 0}%</span>
+            ? <span><Loader2 size={16} className="mx-auto mb-2 animate-spin text-brand-400" />{runtime.status === 'waiting' ? '等待上一段生成完成' : `正在生成 ${runtime.progress || 0}%`}</span>
             : runtime?.error || '连接提示词与参考图后运行'}
         </div>
       )}
       <div className="flex items-center justify-between px-3 py-2 font-mono text-[9px] text-mist-400">
         <span>{data.duration || 5}s</span><span>{data.size || '16:9'}</span>
       </div>
-      <Handle type="target" id="prompt" position={Position.Left} style={{ top: '34%' }} className="!h-2.5 !w-2.5 !border-brand-300 !bg-brand-500" />
-      <Handle type="target" id="ref" position={Position.Left} style={{ top: '70%' }} className="!h-2.5 !w-2.5 !border-sky-400 !bg-sky-400" />
+      <Handle type="target" id="prompt" position={Position.Left} style={{ top: '24%' }} className="!h-2.5 !w-2.5 !border-brand-300 !bg-brand-500" title="提示词" />
+      <Handle type="target" id="ref" position={Position.Left} style={{ top: '53%' }} className="!h-2.5 !w-2.5 !border-sky-400 !bg-sky-400" title="参考图" />
+      <Handle type="target" id="continuation" position={Position.Left} style={{ top: '82%' }} className="!h-3 !w-3 !border-amber-300 !bg-amber-500" title="续集参考：连接上一段视频" />
       <Handle type="source" id="video" position={Position.Right} className="!h-2.5 !w-2.5 !border-brand-300 !bg-brand-500" />
     </Card>
   );
 }
 
 function StoryboardNode({ data }) {
+  const clips = data.__clips || [];
   return (
     <Card tone="violet">
       <Header icon={LayoutGrid} title={nodeTitle(data, '分镜板')} tag="BOARD" />
       <div className="px-3 py-3 text-[10px] leading-relaxed text-mist-300">
-        用来归集多个视频镜头。当前版本负责视觉编排，后续可继续接合成导出。
+        已按连线顺序归集 {clips.length} 个可用片段，可在右侧连续预览、拼接并导出。
       </div>
+      {data.exportUrl && <video src={data.exportUrl} controls playsInline className="nodrag nowheel h-28 w-full bg-black object-contain" />}
       <Handle type="target" id="clip" position={Position.Left} className="!h-2.5 !w-2.5 !border-violet-400 !bg-violet-500" />
     </Card>
   );
@@ -209,7 +213,32 @@ const nodeTypes = {
   character: CharacterNode, video: VideoNode, storyboard: StoryboardNode,
 };
 
-function Inspector({ node, updateNode, removeNode, uploadBusy, onUpload, onRun, runBusy, onRunAi, aiBusy, geminiMeta }) {
+function StoryboardPreview({ clips }) {
+  const [index, setIndex] = useState(0);
+  useEffect(() => { setIndex(0); }, [clips.length, clips.map((clip) => clip.url).join('|')]);
+  if (!clips.length) return <p className="rounded-lg border border-dashed border-ink-600 px-3 py-5 text-center text-[10px] text-mist-400">把已有成片的视频节点连接到分镜板后，可按顺序预览。</p>;
+  const current = clips[Math.min(index, clips.length - 1)];
+  return (
+    <div className="overflow-hidden rounded-lg border border-ink-600 bg-black/40">
+      <video
+        key={current.url}
+        src={current.url}
+        controls
+        autoPlay
+        playsInline
+        onEnded={() => setIndex((value) => Math.min(value + 1, clips.length - 1))}
+        className="aspect-video w-full bg-black object-contain"
+      />
+      <div className="flex items-center justify-between gap-2 px-2 py-2 text-[10px] text-mist-300">
+        <button onClick={() => setIndex((value) => Math.max(0, value - 1))} disabled={index === 0} className="rounded p-1 hover:bg-white/10 disabled:opacity-30"><SkipBack size={13} /></button>
+        <span className="truncate">{index + 1}/{clips.length} · {current.label}</span>
+        <button onClick={() => setIndex((value) => Math.min(clips.length - 1, value + 1))} disabled={index >= clips.length - 1} className="rounded p-1 hover:bg-white/10 disabled:opacity-30"><SkipForward size={13} /></button>
+      </div>
+    </div>
+  );
+}
+
+function Inspector({ node, updateNode, removeNode, uploadBusy, onUpload, onRun, runBusy, onRunAi, aiBusy, geminiMeta, onExportStoryboard, exportBusy }) {
   if (!node) {
     return (
       <div className="px-4 py-6 text-[12px] leading-relaxed text-mist-400">
@@ -315,6 +344,24 @@ function Inspector({ node, updateNode, removeNode, uploadBusy, onUpload, onRun, 
           <button onClick={() => onRun([node.id], false)} disabled={runBusy} className="flex w-full items-center justify-center gap-2 rounded-lg brand-gradient px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
             {runBusy ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />} 运行此节点
           </button>
+          <p className="text-[10px] leading-relaxed text-mist-400">左侧橙色端口是“续集参考”。从上一段视频的右侧输出拖到这里，系统会自动传入上一段视频和最后一帧，并按顺序生成。</p>
+        </>
+      )}
+      {node.type === 'storyboard' && (
+        <>
+          <div>
+            <p className="mb-2 text-[11px] text-mist-300">顺序预览</p>
+            <StoryboardPreview clips={data.__clips || []} />
+          </div>
+          <button onClick={() => onExportStoryboard(node)} disabled={exportBusy || !(data.__clips || []).length} className="flex w-full items-center justify-center gap-2 rounded-lg brand-gradient px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
+            {exportBusy ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} 拼接并导出 MP4
+          </button>
+          {data.exportUrl && (
+            <a href={data.exportUrl} download className="flex w-full items-center justify-center gap-2 rounded-lg border border-brand-500/35 px-3 py-2 text-[11px] text-brand-300 hover:bg-brand-500/10">
+              <Download size={12} /> 下载已导出的成片
+            </a>
+          )}
+          <p className="text-[10px] leading-relaxed text-mist-400">片段顺序按连接到分镜板的先后排列。导出时会统一画幅、帧率和音轨后无缝拼接。</p>
         </>
       )}
       <button onClick={() => removeNode(node.id)} className="flex w-full items-center justify-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-300 hover:bg-rose-500/20">
@@ -341,6 +388,7 @@ export default function Canvas() {
   const [runBusy, setRunBusy] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
   const [geminiMeta, setGeminiMeta] = useState(null);
   const flowRef = useRef(null);
   const revRef = useRef(1);
@@ -353,11 +401,30 @@ export default function Canvas() {
     ...nodeHistory.map((item) => [item.nodeId, item]),
     ...(latestRun?.nodeRuns || []).map((item) => [item.nodeId, item]),
   ]), [latestRun, nodeHistory]);
+  const storyboardClips = useMemo(() => {
+    const result = new Map();
+    for (const board of nodes.filter((node) => node.type === 'storyboard')) {
+      const incoming = edges
+        .filter((edge) => edge.target === board.id && edge.targetHandle === 'clip')
+        .sort((a, b) => Number(a.data?.order || 0) - Number(b.data?.order || 0));
+      const clips = incoming.map((edge) => {
+        const source = nodes.find((node) => node.id === edge.source);
+        const state = runtime.get(edge.source);
+        return state?.mediaUrl ? { nodeId: edge.source, label: source?.data?.label || '视频片段', url: state.mediaUrl } : null;
+      }).filter(Boolean);
+      result.set(board.id, clips);
+    }
+    return result;
+  }, [edges, nodes, runtime]);
   const displayNodes = useMemo(() => nodes.map((node) => ({
     ...node,
-    data: { ...node.data, __runtime: runtime.get(node.id) || null },
-  })), [nodes, runtime]);
-  const selectedNode = nodes.find((node) => selectedIds.includes(node.id)) || null;
+    data: {
+      ...node.data,
+      __runtime: runtime.get(node.id) || null,
+      ...(node.type === 'storyboard' ? { __clips: storyboardClips.get(node.id) || [] } : {}),
+    },
+  })), [nodes, runtime, storyboardClips]);
+  const selectedNode = displayNodes.find((node) => selectedIds.includes(node.id)) || null;
 
   const snapshot = useCallback(() => ({
     version: 3,
@@ -515,6 +582,7 @@ export default function Canvas() {
     const target = nodes.find((node) => node.id === connection.target);
     const sig = `${source?.type}:${connection.sourceHandle}>${target?.type}:${connection.targetHandle}`;
     if (!LINK_RULES.has(sig) || connection.source === connection.target) return false;
+    if (connection.targetHandle === 'continuation' && edges.some((edge) => edge.target === connection.target && edge.targetHandle === 'continuation')) return false;
     const graphNodes = nodes.map((node) => node.id === connection.source ? { ...node, data: { ...node.data } } : node);
     const outgoing = getOutgoers(source, graphNodes, [...edges, connection]);
     const seen = new Set();
@@ -529,7 +597,19 @@ export default function Canvas() {
 
   const onConnect = useCallback((connection) => {
     if (!isValidConnection(connection)) return toast('这两个端口不能连接，或连线会形成循环', 'error');
-    setEdges((current) => addEdge({ ...connection, id: newId('e_'), markerEnd: { type: MarkerType.ArrowClosed } }, current));
+    setEdges((current) => {
+      const order = connection.targetHandle === 'clip'
+        ? current
+          .filter((edge) => edge.target === connection.target && edge.targetHandle === 'clip')
+          .reduce((max, edge) => Math.max(max, Number(edge.data?.order ?? -1)), -1) + 1
+        : undefined;
+      return addEdge({
+        ...connection,
+        id: newId('e_'),
+        markerEnd: { type: MarkerType.ArrowClosed },
+        ...(order === undefined ? {} : { data: { order } }),
+      }, current);
+    });
   }, [isValidConnection, setEdges, toast]);
 
   const addNodeOf = (type) => {
@@ -649,6 +729,26 @@ export default function Canvas() {
     }
   };
 
+  const exportStoryboard = async (node) => {
+    if (!canvas?.id || exportBusy) return;
+    setExportBusy(true);
+    try {
+      clearTimeout(saveTimerRef.current);
+      await persist();
+      const out = await api.exportStoryboard(canvas.id, node.id);
+      updateNode(node.id, {
+        exportUrl: out.export?.url,
+        exportFilename: out.export?.filename,
+        exportClipCount: out.export?.clips?.length || 0,
+      });
+      toast(`已按顺序拼接 ${out.export?.clips?.length || 0} 个视频片段`, 'ok');
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      setExportBusy(false);
+    }
+  };
+
   const createCanvas = async () => {
     const input = window.prompt('新画布名称', `画布 ${canvases.length + 1}`);
     if (input == null) return;
@@ -761,7 +861,7 @@ export default function Canvas() {
             <span className="text-[12px] font-medium text-white">节点设置</span>
             {selectedNode && <button onClick={() => setSelectedIds([])} className="text-mist-400 hover:text-white"><X size={13} /></button>}
           </div>
-          <Inspector node={selectedNode} updateNode={updateNode} removeNode={removeNode} uploadBusy={uploadBusy} onUpload={uploadImage} onRun={run} runBusy={runBusy} onRunAi={runAiNode} aiBusy={aiBusy} geminiMeta={geminiMeta} />
+          <Inspector node={selectedNode} updateNode={updateNode} removeNode={removeNode} uploadBusy={uploadBusy} onUpload={uploadImage} onRun={run} runBusy={runBusy} onRunAi={runAiNode} aiBusy={aiBusy} geminiMeta={geminiMeta} onExportStoryboard={exportStoryboard} exportBusy={exportBusy} />
           {latestRun && (
             <div className="mx-4 mb-4 rounded-xl border border-ink-600 bg-ink-900 p-3 text-[10px] text-mist-300">
               <div className="mb-2 flex items-center justify-between"><span>最近运行</span><span className={ACTIVE.has(latestRun.status) ? 'text-brand-300' : latestRun.status === 'failed' ? 'text-rose-300' : 'text-emerald-300'}>{latestRun.status}</span></div>

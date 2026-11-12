@@ -16,7 +16,7 @@ import v1Routes from './routes/v1.js';
 import queueRoutes from './routes/queue.js';
 import teamRoutes from './routes/team.js';
 import chatRoutes from './routes/chat.js';
-import canvasRoutes from './routes/canvases.js';
+import canvasRoutes, { startCanvasScheduler } from './routes/canvases.js';
 import geminiRoutes from './routes/gemini.js';
 
 const app = express();
@@ -111,6 +111,7 @@ function bootstrap() {
 
 bootstrap();
 startWorker();
+startCanvasScheduler();
 
 app.listen(CFG.port, CFG.host, () => {
   console.log(`[server] 平台后端已启动 http://${CFG.host}:${CFG.port}`);

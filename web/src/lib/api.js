@@ -68,6 +68,7 @@ export const api = {
   runCanvas: (id, b) => request(`/api/canvases/${encodeURIComponent(id)}/runs`, { method: 'POST', body: b }),
   canvasRuns: (id, limit = 10) => request(`/api/canvases/${encodeURIComponent(id)}/runs?limit=${limit}`),
   canvasRun: (runId) => request(`/api/canvases/runs/${encodeURIComponent(runId)}/status`),
+  exportStoryboard: (id, nodeId) => request(`/api/canvases/${encodeURIComponent(id)}/storyboards/${encodeURIComponent(nodeId)}/export`, { method: 'POST' }),
   jobs: (q = {}) => {
     const s = new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined && v !== null && v !== ''));
     return request(`/api/jobs?${s.toString()}`);

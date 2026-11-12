@@ -117,16 +117,16 @@ export const REFERENCE_PRIORITY_INSTRUCTION = [
   '如果正文中的人物或外观描述与参考图冲突，忽略冲突的文字并严格遵循参考图；不得因冲突而分析、改写、反问或只返回文字，请直接生成视频媒体。',
 ].join('');
 
-function hasReferenceImages(images) {
-  return Array.isArray(images) && images.some((item) => {
+function hasReferences(...groups) {
+  return groups.some((items) => Array.isArray(items) && items.some((item) => {
     if (typeof item === 'string') return item.trim().length > 0;
     return Boolean(item && typeof item === 'object' && String(item.url || '').trim());
-  });
+  }));
 }
 
 export function prepareVideoPayload(payload = {}) {
   const next = { ...payload };
-  if (!hasReferenceImages(payload.images)) return next;
+  if (!hasReferences(payload.images, payload.videos)) return next;
 
   const prompt = String(payload.prompt || '').trim();
   next.prompt = prompt.startsWith(REFERENCE_PRIORITY_INSTRUCTION)
