@@ -91,7 +91,7 @@ function Status({ runtime }) {
 
 function Card({ children, tone = 'brand' }) {
   const border = tone === 'violet' ? 'border-violet-500/40' : tone === 'sky' ? 'border-sky-400/40' : 'border-brand-500/35';
-  return <div className={clsx('min-w-[230px] overflow-hidden rounded-xl border bg-[#0d121b]/95 shadow-xl', border)}>{children}</div>;
+  return <div className={clsx('w-[240px] max-w-[240px] overflow-hidden rounded-xl border bg-[#0d121b]/95 shadow-xl', border)}>{children}</div>;
 }
 
 function Header({ icon: Icon, title, tag, runtime }) {
@@ -109,7 +109,7 @@ function TextNode({ data }) {
   return (
     <Card>
       <Header icon={Type} title={nodeTitle(data, '文本')} tag="TEXT" />
-      <p className="nodrag line-clamp-4 min-h-16 whitespace-pre-wrap px-3 py-2.5 text-[10px] leading-relaxed text-mist-300">
+      <p className="nodrag nowheel h-24 overflow-y-auto whitespace-pre-wrap break-words px-3 py-2.5 text-[10px] leading-relaxed text-mist-300 [overflow-wrap:anywhere]">
         {data.content || '空文本'}
       </p>
       <Handle type="source" id="text" position={Position.Right} className="!h-2.5 !w-2.5 !border-brand-300 !bg-brand-500" />
@@ -133,7 +133,7 @@ function GeminiPromptNode({ data }) {
   return (
     <Card tone="violet">
       <Header icon={Wand2} title={nodeTitle(data, 'AI 提示词')} tag="AI · TEXT" />
-      <p className="nodrag line-clamp-5 min-h-20 whitespace-pre-wrap px-3 py-2.5 text-[10px] leading-relaxed text-mist-300">
+      <p className="nodrag nowheel h-24 overflow-y-auto whitespace-pre-wrap break-words px-3 py-2.5 text-[10px] leading-relaxed text-mist-300 [overflow-wrap:anywhere]">
         {data.content || data.keywords || '在右侧输入关键词并生成'}
       </p>
       <Handle type="source" id="text" position={Position.Right} className="!h-2.5 !w-2.5 !border-violet-300 !bg-violet-500" />

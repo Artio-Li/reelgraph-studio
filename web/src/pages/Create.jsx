@@ -469,15 +469,15 @@ export default function Create() {
         onChange={setParams}
       />
 
-      <Modal open={!!preview} onClose={() => setPreview(null)} title="作品详情" width="max-w-2xl">
+      <Modal open={!!preview} onClose={() => setPreview(null)} title="作品详情" width="max-w-4xl">
         {preview && (
-          <div className="space-y-3">
-            <div className="overflow-hidden rounded-xl bg-black/50">
+          <div className="grid min-h-0 gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(280px,.75fr)]">
+            <div className="flex min-h-[240px] items-center justify-center overflow-hidden rounded-xl bg-black/50 lg:min-h-[420px]">
               {preview.mediaUrl ? (
                 /\.(mp4|webm|mov)/i.test(preview.mediaUrl) ? (
-                  <video src={preview.mediaUrl} controls autoPlay loop className="max-h-[55vh] w-full" />
+                  <video src={preview.mediaUrl} controls autoPlay loop playsInline className="max-h-[70vh] w-full object-contain" />
                 ) : (
-                  <img src={preview.mediaUrl} alt="" className="max-h-[55vh] w-full object-contain" />
+                  <img src={preview.mediaUrl} alt="" className="max-h-[70vh] w-full object-contain" />
                 )
               ) : (
                 <div className="grid h-36 place-items-center text-[12.5px] text-mist-400">
@@ -485,37 +485,45 @@ export default function Create() {
                 </div>
               )}
             </div>
-            <p className="text-[13px] leading-relaxed text-mist-200">{preview.prompt}</p>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] text-ink-500">
-              <span>{preview.params?.duration}s · {preview.params?.size}</span>
-              <span>{preview.cost} 积分</span>
-              {preview.params?.extra && <span className="truncate">{preview.params.extra}</span>}
-              <span>{fmtAgo(preview.createdAt)}</span>
-            </div>
-            <div className="flex justify-end gap-2 pt-1">
-              {preview.mediaUrl && (
-                <a href={preview.mediaUrl} download>
-                  <button className="rounded-lg border border-[#232a38] px-3.5 py-1.5 text-[12px] text-mist-200 hover:border-brand-500/50 hover:text-white">
-                    下载
-                  </button>
-                </a>
-              )}
-              <button
-                onClick={async () => {
-                  if (!confirm('删除这条作品？文件会一起删掉。')) return;
-                  try {
-                    await api.deleteJob(preview.id);
-                    setJobs((l) => l.filter((x) => x.id !== preview.id));
-                    setPreview(null);
-                    toast('已删除', 'ok');
-                  } catch (e) {
-                    toast(e.message, 'error');
-                  }
-                }}
-                className="rounded-lg border border-rose-500/30 px-3.5 py-1.5 text-[12px] text-rose-300 hover:bg-rose-500/10"
-              >
-                删除
-              </button>
+            <div className="flex min-h-0 flex-col gap-3">
+              <details className="group overflow-hidden rounded-xl border border-ink-700 bg-ink-900/60">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-3 text-[12px] font-medium text-mist-200 hover:bg-white/[.03]">
+                  <span>查看完整提示词</span>
+                  <span className="shrink-0 font-mono text-[10px] text-mist-400">{String(preview.prompt || '').length} 字</span>
+                </summary>
+                <p className="max-h-[38vh] overflow-y-auto whitespace-pre-wrap break-words border-t border-ink-700 px-3.5 py-3 text-[12px] leading-relaxed text-mist-300 [overflow-wrap:anywhere]">{preview.prompt}</p>
+              </details>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] text-ink-500">
+                <span>{preview.params?.duration}s · {preview.params?.size}</span>
+                <span>{preview.cost} 积分</span>
+                {preview.params?.extra && <span className="max-w-full truncate">{preview.params.extra}</span>}
+                <span>{fmtAgo(preview.createdAt)}</span>
+              </div>
+              <div className="mt-auto flex justify-end gap-2 pt-1">
+                {preview.mediaUrl && (
+                  <a href={preview.mediaUrl} download>
+                    <button className="rounded-lg border border-[#232a38] px-3.5 py-1.5 text-[12px] text-mist-200 hover:border-brand-500/50 hover:text-white">
+                      下载
+                    </button>
+                  </a>
+                )}
+                <button
+                  onClick={async () => {
+                    if (!confirm('删除这条作品？文件会一起删掉。')) return;
+                    try {
+                      await api.deleteJob(preview.id);
+                      setJobs((l) => l.filter((x) => x.id !== preview.id));
+                      setPreview(null);
+                      toast('已删除', 'ok');
+                    } catch (e) {
+                      toast(e.message, 'error');
+                    }
+                  }}
+                  className="rounded-lg border border-rose-500/30 px-3.5 py-1.5 text-[12px] text-rose-300 hover:bg-rose-500/10"
+                >
+                  删除
+                </button>
+              </div>
             </div>
           </div>
         )}

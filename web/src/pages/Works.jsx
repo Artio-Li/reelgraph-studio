@@ -126,7 +126,13 @@ export default function Works() {
                 </div>
               )}
             </div>
-            <p className="text-[13px] leading-relaxed text-mist-200">{preview.prompt}</p>
+            <details className="group overflow-hidden rounded-xl border border-ink-700 bg-ink-900/60">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-3 text-[12px] font-medium text-mist-200 hover:bg-white/[.03]">
+                <span>查看完整提示词</span>
+                <span className="shrink-0 font-mono text-[10px] text-mist-400">{String(preview.prompt || '').length} 字</span>
+              </summary>
+              <p className="max-h-[38vh] overflow-y-auto whitespace-pre-wrap break-words border-t border-ink-700 px-3.5 py-3 text-[12px] leading-relaxed text-mist-300 [overflow-wrap:anywhere]">{preview.prompt}</p>
+            </details>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px] text-ink-500">
               <span>{preview.params?.duration || 5}s · {preview.params?.size}</span>
               <span>{preview.cost} 积分</span>

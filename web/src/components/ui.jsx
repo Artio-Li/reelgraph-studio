@@ -111,14 +111,14 @@ export function Modal({ open, onClose, title, children, width = 'max-w-lg' }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-      <div className={clsx('card relative w-full fade-in shadow-2xl', width)}>
+      <div className={clsx('card relative flex max-h-[calc(100dvh-2rem)] w-full flex-col overflow-hidden fade-in shadow-2xl', width)}>
         <div className="flex items-center justify-between border-b border-ink-700 px-5 py-3.5">
           <h3 className="text-[15px] font-semibold text-white">{title}</h3>
           <button onClick={onClose} className="rounded-lg p-1.5 text-mist-400 hover:bg-ink-700 hover:text-white">
             <X size={16} />
           </button>
         </div>
-        <div className="px-5 py-4">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
       </div>
     </div>
   );
