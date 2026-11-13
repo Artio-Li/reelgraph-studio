@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Clapperboard, ImagePlus, Layers, Loader2, Play, RefreshCw, RotateCcw, Sparkles, Workflow, X,
@@ -24,6 +24,37 @@ function statusTone(status) {
   if (status === 'failed') return 'bg-rose-500/15 text-rose-300';
   if (status === 'queued') return 'bg-ink-700 text-mist-300';
   return 'bg-brand-500/15 text-brand-300';
+}
+
+/* 分区标题：让每组字段有明确边界 */
+function Section({ title, desc, first = false, children }) {
+  return (
+    <section className={clsx('space-y-3', first ? '' : 'border-t border-ink-800 pt-5')}>
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <h3 className="text-[12.5px] font-medium text-mist-200">{title}</h3>
+        {desc && <span className="text-[10.5px] leading-relaxed text-mist-500">{desc}</span>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/* 参数卡：选项说明直接贴在控件下方，避免"这段文字对应哪个框" */
+function PresetDetail({ title, rows }) {
+  if (!rows?.length) return null;
+  return (
+    <div className="mt-2 rounded-lg border border-ink-700/70 bg-ink-900/50 px-3 py-2">
+      {title && <p className="mb-1 text-[10.5px] font-medium text-mist-300">{title}</p>}
+      <dl className="space-y-0.5">
+        {rows.map(([key, value]) => (
+          <div key={key} className="flex gap-2 text-[10.5px] leading-relaxed">
+            <dt className="w-7 shrink-0 text-mist-500">{key}</dt>
+            <dd className="min-w-0 flex-1 text-mist-400">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
 }
 
 export default function Director() {
@@ -95,7 +126,6 @@ export default function Director() {
 
   const currentSettled = current && !ACTIVE.has(current.status);
 
-  // 有进行中/排队中的任务就轮询
   useEffect(() => {
     const anyActive = list.some((item) => ACTIVE.has(item.status) || QUEUED.has(item.status));
     if (!anyActive && !(current && ACTIVE.has(current.status))) return undefined;
@@ -115,6 +145,21 @@ export default function Director() {
     return () => clearInterval(timer);
   }, [current, list, loadAll, toast]);
 
+  const activeStyle = styles.find((item) => item.id === form.styleId) || null;
+  const activeStory = presets.stories.find((item) => item.id === form.storyId) || null;
+  const activeShot = presets.shots.find((item) => item.id === form.shotId) || null;
+  const activeCard = presets.characters.find((item) => item.id === form.characterId) || null;
+
+  const groupedStyles = useMemo(() => {
+    const map = new Map();
+    for (const item of styles) {
+      const key = item.group || '其他';
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(item);
+    }
+    return [...map.entries()];
+  }, [styles]);
+
   const onPick = async (files) => {
     if (!files?.length) return;
     if (refs.length + files.length > 4) return toast('参考图最多 4 张', 'error');
@@ -128,6 +173,22 @@ export default function Director() {
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const generateRef = async () => {
+    if (refPrompt.trim().length < 4) return toast('请先描述人物长相', 'error');
+    if (refs.length >= 4) return toast('参考图最多 4 张', 'error');
+    setGenerating(true);
+    try {
+      const out = await api.generateReferenceImage({ prompt: refPrompt.trim(), provider: form.provider });
+      setRefs((prev) => [...prev, { url: out.image.url }].slice(0, 4));
+      setRefPrompt('');
+      toast(`参考图已生成（${out.image.cost || 0} 积分）`, 'ok');
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      setGenerating(false);
     }
   };
 
@@ -148,35 +209,6 @@ export default function Director() {
       styleId,
       ...(preset?.aspect ? { size: preset.aspect } : {}),
     }));
-  };
-
-  const activeStyle = styles.find((item) => item.id === form.styleId) || null;
-  const activeStory = presets.stories.find((item) => item.id === form.storyId) || null;
-  const activeShot = presets.shots.find((item) => item.id === form.shotId) || null;
-  const groupedStyles = useMemo(() => {
-    const map = new Map();
-    for (const item of styles) {
-      const key = item.group || '其他';
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(item);
-    }
-    return [...map.entries()];
-  }, [styles]);
-
-  const generateRef = async () => {
-    if (refPrompt.trim().length < 4) return toast('请先描述人物长相', 'error');
-    if (refs.length >= 4) return toast('参考图最多 4 张', 'error');
-    setGenerating(true);
-    try {
-      const out = await api.generateReferenceImage({ prompt: refPrompt.trim(), provider: form.provider });
-      setRefs((prev) => [...prev, { url: out.image.url }].slice(0, 4));
-      setRefPrompt('');
-      toast(`参考图已生成（${out.image.cost || 0} 积分）`, 'ok');
-    } catch (error) {
-      toast(error.message, 'error');
-    } finally {
-      setGenerating(false);
-    }
   };
 
   const draftPlan = async () => {
@@ -244,26 +276,24 @@ export default function Director() {
   );
 
   return (
-    <div className="mx-auto w-full max-w-[1100px] px-6 py-6">
+    <div className="mx-auto w-full max-w-[1240px] px-6 py-6">
       <header className="mb-5">
         <p className="eyebrow">Director · Auto</p>
-        <h1 className="mt-1.5 flex items-center gap-2 text-[26px] font-semibold text-white">
+        <h1 className="mt-1.5 flex flex-wrap items-center gap-2 text-[26px] font-semibold text-white">
           自动导演
           <span className="h-1.5 w-1.5 rounded-full bg-brand-400" />
           <span className="brand-text">一句话进，成片出</span>
         </h1>
-        <p className="mt-1.5 text-[12.5px] text-mist-400">
+        <p className="mt-1.5 text-[12.5px] leading-relaxed text-mist-400">
           给出方向与关键词，AI 自动写分镜、生成画面、质检修复、串成片子。中间过程不用管。
         </p>
       </header>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
-        <section className="card p-4">
-          <div className="mb-4 flex gap-1 rounded-xl bg-ink-900 p-1">
-            {[
-              ['single', '单条'],
-              ['batch', '批量'],
-            ].map(([key, label]) => (
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
+        {/* ---------------- 表单 ---------------- */}
+        <div className="card space-y-5 p-5">
+          <div className="flex gap-1 rounded-xl bg-ink-900 p-1">
+            {[['single', '单条'], ['batch', '批量']].map(([key, label]) => (
               <button
                 key={key}
                 onClick={() => setMode(key)}
@@ -277,52 +307,101 @@ export default function Director() {
             ))}
           </div>
 
-          {mode === 'single' ? (
-            <>
-              <Field label="创作方向">
+          <Section title="内容" desc="要拍什么" first>
+            {mode === 'single' ? (
+              <>
+                <Field label="创作方向">
+                  <Textarea
+                    rows={2}
+                    value={form.direction}
+                    onChange={set('direction')}
+                    placeholder="例如：都市女性周末独自旅行的治愈短片"
+                  />
+                </Field>
+                <Field label="关键词" hint="用逗号分隔，越具体越好">
+                  <Input value={form.keywords} onChange={set('keywords')} placeholder="清晨, 咖啡, 街角, 阳光, 慢节奏" />
+                </Field>
+              </>
+            ) : (
+              <Field
+                label="批量方向"
+                hint="每行一条，可用「方向|关键词」；按顺序串行执行，一条完成再开下一条"
+              >
                 <Textarea
-                  rows={2}
-                  value={form.direction}
-                  onChange={set('direction')}
-                  placeholder="例如：都市女性周末独自旅行的治愈短片"
+                  rows={7}
+                  value={batchText}
+                  onChange={(event) => setBatchText(event.target.value)}
+                  className="font-mono text-[11.5px] leading-relaxed"
+                  placeholder={'都市女性周末独自旅行|清晨,咖啡,阳光\n海边日落跑步|黄昏,慢动作,海风\n深夜书房写字|台灯,雨声,特写'}
                 />
               </Field>
-              <Field label="关键词" hint="用逗号分隔，越具体越好">
-                <Input value={form.keywords} onChange={set('keywords')} placeholder="清晨, 咖啡, 街角, 阳光, 慢节奏" />
-              </Field>
-            </>
-          ) : (
-            <Field
-              label="批量方向"
-              hint="每行一条；可用「方向|关键词」的写法。按顺序串行执行，一条完成再开下一条"
-            >
-              <Textarea
-                rows={7}
-                value={batchText}
-                onChange={(event) => setBatchText(event.target.value)}
-                className="font-mono text-[11.5px]"
-                placeholder={'都市女性周末独自旅行|清晨,咖啡,阳光\n海边日落跑步|黄昏,慢动作,海风\n深夜书房写字|台灯,雨声,特写'}
-              />
-            </Field>
-          )}
+            )}
+          </Section>
 
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            <Field label="成片时长（秒）">
-              <Select value={form.totalSeconds} onChange={set('totalSeconds')}>
-                {[15, 20, 30, 40, 50, 60].map((n) => <option key={n} value={n}>{n} 秒</option>)}
+          <Section title="规格" desc="多长、什么画幅">
+            <div className="grid grid-cols-3 gap-3">
+              <Field label="成片时长">
+                <Select value={form.totalSeconds} onChange={set('totalSeconds')}>
+                  {[15, 20, 30, 40, 50, 60].map((n) => <option key={n} value={n}>{n} 秒</option>)}
+                </Select>
+              </Field>
+              <Field label="每镜时长">
+                <Select value={form.shotSeconds} onChange={set('shotSeconds')}>
+                  {[5, 6, 8, 10].map((n) => <option key={n} value={n}>{n} 秒</option>)}
+                </Select>
+              </Field>
+              <Field label="画幅">
+                <Select value={form.size} onChange={set('size')}>
+                  {['9:16', '16:9', '1:1'].map((s) => <option key={s} value={s}>{s}</option>)}
+                </Select>
+              </Field>
+            </div>
+          </Section>
+
+          <Section title="叙事与镜头" desc="先定怎么讲，再定怎么拍">
+            <Field label="叙事结构" hint={activeStory ? activeStory.note : '决定镜头按什么顺序讲'}>
+              <Select value={form.storyId} onChange={set('storyId')}>
+                <option value="">不指定</option>
+                {presets.stories.map((item) => (
+                  <option key={item.id} value={item.id}>{item.label}</option>
+                ))}
               </Select>
+              {activeStory && (
+                <div className="mt-2 flex flex-wrap items-center gap-1">
+                  {activeStory.beats.map((beat, index) => (
+                    <Fragment key={beat.label}>
+                      <span className="rounded-md bg-ink-800 px-1.5 py-0.5 text-[10.5px] text-mist-300">
+                        {beat.label}
+                        <span className="ml-1 text-mist-500">{Math.round(beat.weight * 100)}%</span>
+                      </span>
+                      {index < activeStory.beats.length - 1 && <span className="text-mist-600">→</span>}
+                    </Fragment>
+                  ))}
+                </div>
+              )}
             </Field>
-            <Field label="每镜时长">
-              <Select value={form.shotSeconds} onChange={set('shotSeconds')}>
-                {[5, 6, 8, 10].map((n) => <option key={n} value={n}>{n} 秒</option>)}
+
+            <Field label="镜头配方" hint={activeShot ? activeShot.note : '开场 / 中段 / 收尾的景别与运镜'}>
+              <Select value={form.shotId} onChange={set('shotId')}>
+                <option value="">不指定</option>
+                {presets.shots.map((item) => (
+                  <option key={item.id} value={item.id}>{item.label}</option>
+                ))}
               </Select>
+              {activeShot && (
+                <PresetDetail
+                  rows={[
+                    ['开场', activeShot.grammar.open],
+                    ['中段', activeShot.grammar.middle],
+                    ['收尾', activeShot.grammar.close],
+                  ]}
+                />
+              )}
             </Field>
-            <Field label="画幅">
-              <Select value={form.size} onChange={set('size')}>
-                {['9:16', '16:9', '1:1'].map((s) => <option key={s} value={s}>{s}</option>)}
-              </Select>
-            </Field>
-            <Field label="风格预设">
+          </Section>
+
+          <Section title="视觉风格" desc="看起来像什么拍的">
+            <Field label="风格预设" hint={activeStyle ? activeStyle.note : '选一个预设，或自定义'}>
               <Select value={form.styleId} onChange={pickStyle}>
                 {groupedStyles.map(([group, items]) => (
                   <optgroup key={group} label={group}>
@@ -333,127 +412,103 @@ export default function Director() {
                 ))}
                 <option value="">自定义</option>
               </Select>
+              {activeStyle && (
+                <PresetDetail
+                  title={`「${activeStyle.label}」参数`}
+                  rows={[
+                    ['镜头', activeStyle.camera],
+                    ['光线', activeStyle.lighting],
+                    ['调色', activeStyle.color],
+                    ['质感', activeStyle.texture],
+                    ['构图', activeStyle.composition],
+                  ]}
+                />
+              )}
             </Field>
-          </div>
 
-          <div className="mt-1 grid grid-cols-2 gap-3">
-            <Field label="叙事结构" hint="决定镜头按什么顺序讲">
-              <Select value={form.storyId} onChange={set('storyId')}>
-                <option value="">不限</option>
-                {presets.stories.map((item) => (
+            {form.styleId === '' && (
+              <Field label="自定义风格" hint="用一句话描述光线、镜头、材质与色调">
+                <Input
+                  value={form.style}
+                  onChange={set('style')}
+                  placeholder="例如：阴天散射光，长焦压缩，低饱和冷调，轻微手持"
+                />
+              </Field>
+            )}
+          </Section>
+
+          <Section title="人物" desc="谁在演，长什么样">
+            <Field label="人物卡" hint={activeCard ? `${activeCard.note}；选择后会自动填入下方人物设定` : '选一个原型，会自动填好人物设定'}>
+              <Select value={form.characterId} onChange={pickCard}>
+                <option value="">不指定</option>
+                {presets.characters.map((item) => (
                   <option key={item.id} value={item.id}>{item.label}</option>
                 ))}
               </Select>
+              {activeCard && (
+                <PresetDetail
+                  rows={[
+                    ['年龄', `${activeCard.age} · ${activeCard.gender}`],
+                    ['气质', activeCard.temperament],
+                    ['发型', activeCard.hair],
+                    ['服装', activeCard.outfit],
+                    ['配饰', activeCard.accessory],
+                  ]}
+                />
+              )}
             </Field>
-            <Field label="镜头配方" hint="开场 / 中段 / 收尾的景别与运镜">
-              <Select value={form.shotId} onChange={set('shotId')}>
-                <option value="">不限</option>
-                {presets.shots.map((item) => (
-                  <option key={item.id} value={item.id}>{item.label}</option>
-                ))}
-              </Select>
-            </Field>
-          </div>
 
-          {activeStory && (
-            <p className="-mt-1 mb-2 text-[10.5px] leading-relaxed text-mist-400">
-              节拍：{activeStory.beats.map((beat) => beat.label).join(' → ')}
-            </p>
-          )}
-          {activeShot && (
-            <p className="-mt-1 mb-2 text-[10.5px] leading-relaxed text-mist-400">
-              开场 {activeShot.grammar.open}　·　中段 {activeShot.grammar.middle}　·　收尾 {activeShot.grammar.close}
-            </p>
-          )}
-
-          {activeStyle && (
-            <div className="-mt-1 mb-3 rounded-lg border border-ink-700 bg-ink-900/60 px-2.5 py-2 text-[10.5px] leading-relaxed text-mist-400">
-              <p className="text-[11px] text-mist-300">{activeStyle.note}</p>
-              {[
-                ['镜头', activeStyle.camera],
-                ['光线', activeStyle.lighting],
-                ['调色', activeStyle.color],
-                ['质感', activeStyle.texture],
-                ['构图', activeStyle.composition],
-              ].map(([key, value]) => (
-                <p key={key} className="mt-0.5">
-                  <span className="mr-1 inline-block w-7 shrink-0 text-mist-500">{key}</span>
-                  {value}
-                </p>
-              ))}
-            </div>
-          )}
-
-          {form.styleId === '' && (
-            <Field label="自定义风格" hint="用一句话描述光线、镜头、材质与色调">
+            <Field label="人物设定" hint="会逐段复述到每条提示词里，提升长片一致性">
               <Input
-                value={form.style}
-                onChange={set('style')}
-                placeholder="例如：阴天散射光，长焦压缩，低饱和冷调，轻微手持"
+                value={form.characterDescription}
+                onChange={set('characterDescription')}
+                placeholder="24 岁女性，黑色短发，米色风衣"
               />
             </Field>
-          )}
 
-          <Field label="提示词 AI" hint="负责写分镜与修复提示词；选中的不可用时会自动降级">
-            <Select value={form.provider} onChange={set('provider')}>
-              {(providers.length ? providers : [{ id: 'chatgpt2api', label: 'ChatGPT2API' }]).map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.label}{item.textModel ? ` · ${item.textModel}` : ''}
-                </option>
-              ))}
-            </Select>
-          </Field>
-
-          <Field label="人物卡" hint="选一个原型会自动填好下方人物设定，可再手动改">
-            <Select value={form.characterId} onChange={pickCard}>
-              <option value="">不指定</option>
-              {presets.characters.map((item) => (
-                <option key={item.id} value={item.id}>{item.label}</option>
-              ))}
-            </Select>
-          </Field>
-
-          <Field label="人物设定" hint="可选；填了会在每段提示词里重复，提升一致性">
-            <Input
-              value={form.characterDescription}
-              onChange={set('characterDescription')}
-              placeholder="24 岁女性，黑色短发，米色风衣"
-            />
-          </Field>
-
-          <Field label="人物参考图" hint="可选；最多 4 张同一人物的多角度照片，会作为身份锚点贯穿所有镜头">
-            <div className="flex flex-wrap items-center gap-2">
-              {refs.map((ref, index) => (
-                <div key={ref.url} className="relative h-16 w-16 overflow-hidden rounded-lg border border-ink-700">
-                  <img src={ref.url} alt="" className="h-full w-full object-cover" />
+            <Field label="人物参考图" hint="最多 4 张同一人物的多角度照片，作为身份锚点贯穿所有镜头">
+              <div className="flex flex-wrap items-center gap-2">
+                {refs.map((ref, index) => (
+                  <div key={ref.url} className="relative h-16 w-16 overflow-hidden rounded-lg border border-ink-700">
+                    <img src={ref.url} alt="" className="h-full w-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => setRefs((prev) => prev.filter((item) => item.url !== ref.url))}
+                      className="absolute right-0 top-0 grid h-4 w-4 place-items-center bg-black/70 text-white"
+                    >
+                      <X size={9} />
+                    </button>
+                    <span className="absolute bottom-0 left-0 bg-black/60 px-1 font-mono text-[8px] text-white">
+                      #{index + 1}
+                    </span>
+                  </div>
+                ))}
+                {refs.length < 4 && (
                   <button
                     type="button"
-                    onClick={() => setRefs((prev) => prev.filter((item) => item.url !== ref.url))}
-                    className="absolute right-0 top-0 grid h-4 w-4 place-items-center bg-black/70 text-white"
+                    onClick={() => fileRef.current?.click()}
+                    className="flex h-16 w-16 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-ink-600 text-[10px] text-mist-400 transition hover:border-brand-500/50 hover:text-brand-300"
                   >
-                    <X size={9} />
+                    {uploading ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
+                    添加
                   </button>
-                  <span className="absolute bottom-0 left-0 bg-black/60 px-1 font-mono text-[8px] text-white">
-                    #{index + 1}
-                  </span>
-                </div>
-              ))}
-              {refs.length < 4 && (
-                <button
-                  type="button"
-                  onClick={() => fileRef.current?.click()}
-                  className="flex h-16 w-16 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-ink-600 text-[10px] text-mist-400 transition hover:border-brand-500/50 hover:text-brand-300"
-                >
-                  {uploading ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
-                  添加
-                </button>
-              )}
-              <div className="flex w-full items-center gap-2 pt-1">
+                )}
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  hidden
+                  onChange={(event) => onPick(event.target.files)}
+                />
+              </div>
+
+              <div className="mt-2 flex items-center gap-2">
                 <Input
                   value={refPrompt}
                   onChange={(event) => setRefPrompt(event.target.value)}
                   onKeyDown={(event) => { if (event.key === 'Enter') generateRef(); }}
-                  placeholder="或用文字描述人物长相，AI 生成参考图"
+                  placeholder="或用文字描述人物长相，AI 生成参考图（5 积分）"
                   className="h-8 min-w-0 flex-1 text-[11.5px]"
                 />
                 <Button
@@ -466,23 +521,30 @@ export default function Director() {
                   <Sparkles size={12} /> 生成
                 </Button>
               </div>
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/*"
-                multiple
-                hidden
-                onChange={(event) => onPick(event.target.files)}
-              />
-            </div>
-          </Field>
+            </Field>
+          </Section>
 
-          <label className="mt-2 flex items-center gap-2 text-[12px] text-mist-300">
-            <input type="checkbox" checked={form.chain} onChange={set('chain')} className="accent-brand-400" />
-            使用续集链（每 3 段自动断开，避免身份漂移）
-          </label>
+          <Section title="执行" desc="谁来写、怎么跑">
+            <Field label="提示词 AI" hint="负责写分镜与修复提示词；选中的不可用时会自动降级">
+              <Select value={form.provider} onChange={set('provider')}>
+                {(providers.length ? providers : [{ id: 'chatgpt2api', label: 'ChatGPT2API' }]).map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}{item.textModel ? ` · ${item.textModel}` : ''}
+                  </option>
+                ))}
+              </Select>
+            </Field>
 
-          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <label className="flex items-start gap-2 rounded-lg border border-ink-800 bg-ink-900/40 px-3 py-2 text-[11.5px] leading-relaxed text-mist-300">
+              <input type="checkbox" checked={form.chain} onChange={set('chain')} className="mt-0.5 accent-brand-400" />
+              <span>
+                使用续集链
+                <span className="ml-1 text-mist-500">镜头之间动作连续；每 3 段自动断开一次，避免身份漂移</span>
+              </span>
+            </label>
+          </Section>
+
+          <div className="flex flex-wrap items-center gap-2 border-t border-ink-800 pt-4">
             {mode === 'single' ? (
               <>
                 <Button variant="outline" onClick={draftPlan} loading={planning}>
@@ -491,7 +553,7 @@ export default function Director() {
                 <Button onClick={start} loading={starting}>
                   <Play size={14} /> 开始生产
                 </Button>
-                <span className="text-[11.5px] text-mist-400">
+                <span className="text-[11px] text-mist-500">
                   约 {Math.max(1, Math.round(form.totalSeconds / form.shotSeconds))} 个镜头
                 </span>
               </>
@@ -500,24 +562,25 @@ export default function Director() {
                 <Button onClick={startBatch} loading={starting}>
                   <Layers size={14} /> 批量提交
                 </Button>
-                <span className="text-[11.5px] text-mist-400">
+                <span className="text-[11px] text-mist-500">
                   共 {batchText.split(/\r?\n/).filter((line) => line.trim()).length} 条
                 </span>
               </>
             )}
           </div>
-        </section>
+        </div>
 
+        {/* ---------------- 右侧 ---------------- */}
         <aside className="space-y-4">
           {plan && mode === 'single' && (
             <section className="card p-4">
-              <div className="mb-2 flex items-center justify-between">
+              <div className="mb-3 flex items-center justify-between">
                 <h2 className="text-[13px] font-medium text-mist-200">分镜预览</h2>
                 <span className="font-mono text-[11px] text-brand-300">
                   {plan.shots.length} 镜 · {shotTotal}s
                 </span>
               </div>
-              <div className="max-h-[300px] space-y-2 overflow-y-auto pr-1">
+              <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1">
                 {plan.shots.map((shot) => (
                   <div key={shot.index} className="rounded-lg border border-ink-700 bg-ink-900 p-2.5">
                     <div className="mb-1 flex items-center justify-between text-[11.5px]">
@@ -535,13 +598,13 @@ export default function Director() {
 
           {current && (
             <section className="card p-4">
-              <div className="mb-2 flex items-center justify-between">
+              <div className="mb-2 flex items-center justify-between gap-2">
                 <h2 className="text-[13px] font-medium text-mist-200">当前任务</h2>
-                <span className={clsx('rounded-md px-2 py-0.5 text-[11px]', statusTone(current.status))}>
+                <span className={clsx('shrink-0 rounded-md px-2 py-0.5 text-[11px]', statusTone(current.status))}>
                   {STATUS_TEXT[current.status] || current.status}
                 </span>
               </div>
-              <p className="text-[11.5px] text-mist-400">
+              <p className="text-[11.5px] leading-relaxed text-mist-400">
                 {current.plan?.title || current.brief?.direction || '未命名'}
                 {current.stage ? ` · ${current.stage}` : ''}
               </p>
@@ -554,25 +617,31 @@ export default function Director() {
               {current.output?.url && (
                 <div className="mt-3 space-y-2">
                   <video src={current.output.url} controls className="w-full rounded-lg bg-black" />
-                  <div className="flex items-center justify-between text-[11px] text-mist-400">
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-mist-400">
                     <span>
                       {current.output.totalSeconds || '—'}s · {current.output.shotCount || 0} 镜
                       {current.output.quality ? ` · 质检 ${current.output.quality.passed}/${current.output.quality.checked}` : ''}
                       {current.output.quality?.retried ? ` · 重试 ${current.output.quality.retried} 次` : ''}
                     </span>
-                    <a href={current.output.url} download className="text-brand-300 hover:text-brand-200">下载</a>
+                    <a href={current.output.url} download className="shrink-0 text-brand-300 hover:text-brand-200">下载</a>
                   </div>
                 </div>
               )}
               {current.error && <p className="mt-2 text-[11.5px] leading-relaxed text-rose-300">{current.error}</p>}
               <div className="mt-3 flex items-center gap-3">
                 {current.canvasId && (
-                  <Link to={`/canvas?canvas=${current.canvasId}`} className="flex items-center gap-1.5 text-[11.5px] text-mist-400 hover:text-brand-300">
+                  <Link
+                    to={`/canvas?canvas=${current.canvasId}`}
+                    className="flex items-center gap-1.5 text-[11.5px] text-mist-400 hover:text-brand-300"
+                  >
                     <Workflow size={12} /> 打开画布
                   </Link>
                 )}
                 {currentSettled && current.status === 'failed' && (
-                  <button onClick={() => retry(current.id)} className="flex items-center gap-1.5 text-[11.5px] text-mist-400 hover:text-brand-300">
+                  <button
+                    onClick={() => retry(current.id)}
+                    className="flex items-center gap-1.5 text-[11.5px] text-mist-400 hover:text-brand-300"
+                  >
                     <RotateCcw size={12} /> 重新排队
                   </button>
                 )}
@@ -602,10 +671,16 @@ export default function Director() {
                         <button
                           key={item.id}
                           onClick={() => setCurrent(item)}
-                          className="flex w-full items-center justify-between rounded px-1 py-0.5 text-left text-[10.5px] text-mist-400 hover:bg-ink-800"
+                          className="flex w-full items-center justify-between gap-2 rounded px-1 py-0.5 text-left text-[10.5px] text-mist-400 hover:bg-ink-800"
                         >
                           <span className="truncate">{item.plan?.title || item.brief?.direction || '未命名'}</span>
-                          <span className={clsx('ml-2 shrink-0', item.status === 'failed' ? 'text-rose-300' : item.status === 'completed' ? 'text-emerald-300' : 'text-mist-400')}>
+                          <span
+                            className={clsx(
+                              'shrink-0',
+                              item.status === 'failed' ? 'text-rose-300'
+                                : item.status === 'completed' ? 'text-emerald-300' : 'text-mist-400',
+                            )}
+                          >
                             {STATUS_TEXT[item.status] || item.status}
                           </span>
                         </button>
@@ -622,13 +697,13 @@ export default function Director() {
               <h2 className="text-[13px] font-medium text-mist-200">历史</h2>
               <span className="text-[10.5px] text-mist-400">{list.length} 条</span>
             </div>
-            <div className="max-h-[220px] space-y-1 overflow-y-auto pr-1">
+            <div className="max-h-[240px] space-y-1 overflow-y-auto pr-1">
               {list.slice(0, 20).map((item) => (
                 <button
                   key={item.id}
                   onClick={() => setCurrent(item)}
                   className={clsx(
-                    'flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-[11.5px] transition',
+                    'flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[11.5px] transition',
                     current?.id === item.id ? 'bg-ink-700 text-white' : 'text-mist-300 hover:bg-ink-800',
                   )}
                 >
