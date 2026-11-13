@@ -12,6 +12,10 @@ import { CFG } from './config.js';
 import { db, uid, now, priceOf, getSetting } from './db.js';
 import { canvasProvider } from './canvasAI.js';
 import { getStylePreset, styleBaseline } from './styles.js';
+import {
+  getStoryStructure, getShotRecipe, getCharacterCard,
+  storyBaseline, shotBaseline, characterBaseline,
+} from './presets.js';
 import { signToken } from './auth.js';
 
 const ACTIVE = new Set(['planning', 'running', 'assembling']);
@@ -79,6 +83,12 @@ function plannerUserPrompt(brief) {
     ? styleBaseline(preset)
     : (brief.style ? `风格：${String(brief.style).slice(0, 300)}` : '');
   const styleAvoid = preset && preset.negative ? `避免出现：${preset.negative}` : '';
+  const story = getStoryStructure(brief.storyId);
+  const recipe = getShotRecipe(brief.shotId);
+  const card = getCharacterCard(brief.characterId);
+  const storyLine = story ? storyBaseline(story, count) : '';
+  const shotLine = recipe ? shotBaseline(recipe) : '';
+  const characterLine = card ? characterBaseline(card) : '';
   return [
     `创作方向：${String(brief.direction || '').slice(0, 500)}`,
     brief.keywords ? `关键词：${String(brief.keywords).slice(0, 500)}` : '',
@@ -88,7 +98,11 @@ function plannerUserPrompt(brief) {
     `画幅：${brief.size || '9:16'}`,
     styleLine,
     styleAvoid,
-    brief.characterDescription ? `人物设定：${String(brief.characterDescription).slice(0, 300)}` : '',
+    storyLine,
+    shotLine,
+    characterLine || (brief.characterDescription
+      ? `人物设定（每个镜头都要原样复述）：${String(brief.characterDescription).slice(0, 300)}`
+      : ''),
     `请输出 ${count} 个镜头的 JSON。`,
   ].filter(Boolean).join('\n');
 }
@@ -114,20 +128,26 @@ async function planWithLLM(brief) {
     } catch {
       continue;
     }
-    try {
-      const out = await selected.target.generateText({
-        messages: [
-          { role: 'system', content: PLANNER_SYSTEM },
-          { role: 'user', content: plannerUserPrompt(brief) },
-        ],
-        temperature: 0.7,
-      });
-      const plan = extractJson(out?.content);
-      if (!Array.isArray(plan?.shots) || !plan.shots.length) throw new Error('分镜为空');
-      return { ...plan, provider };
-    } catch (error) {
-      errors.push(`${provider}: ${String(error.message || error).slice(0, 120)}`);
+    let lastError;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const out = await selected.target.generateText({
+          messages: [
+            { role: 'system', content: PLANNER_SYSTEM },
+            { role: 'user', content: plannerUserPrompt(brief) },
+          ],
+          temperature: 0.7,
+        });
+        const plan = extractJson(out?.content);
+        if (!Array.isArray(plan?.shots) || !plan.shots.length) {
+          throw new Error(`分镜为空（返回结构：${JSON.stringify(plan).slice(0, 300)}）`);
+        }
+        return { ...plan, provider };
+      } catch (error) {
+        lastError = error;
+      }
     }
+    errors.push(`${provider}: ${String(lastError?.message || lastError).slice(0, 120)}`);
   }
   throw fail(`所有 AI Provider 均未返回可用分镜（${errors.join('；') || '无可用 Provider'}）`, 502);
 }
@@ -214,6 +234,9 @@ function validatePlan(plan, brief) {
       : null,
     provider: String(plan.provider || 'unknown'),
     styleId: String(brief.styleId || ''),
+    storyId: String(brief.storyId || ''),
+    shotId: String(brief.shotId || ''),
+    characterId: String(brief.characterId || ''),
     shots: normalized,
     totalSeconds: total,
     estimatedCost: normalized.reduce(
@@ -367,6 +390,7 @@ export async function planProduction(brief) {
     plan = validatePlan(await planWithLLM(brief), brief);
   } catch (error) {
     if (error.status && error.status !== 502) throw error;
+    console.warn('[director] AI 规划失败，回退规则分镜:', String(error.message || error).slice(0, 600));
     plan = validatePlan(planFallback(brief), brief);
   }
   const { doc, storyboardId } = buildCanvasDoc(plan, brief);

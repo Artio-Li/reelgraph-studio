@@ -10,6 +10,7 @@ import { CFG, MEDIA_DIR } from '../config.js';
 import { db, uid, now, addCredits, priceOf } from '../db.js';
 import { generateCanvasImage } from '../canvasAI.js';
 import { STYLE_PRESETS } from '../styles.js';
+import { STORY_STRUCTURES, SHOT_RECIPES, CHARACTER_CARDS } from '../presets.js';
 
 const UPLOAD_DIR = path.join(CFG.dataDir, 'uploads');
 
@@ -32,10 +33,21 @@ function normalizeBrief(body) {
     chain: body?.chain === true,
     provider: String(body?.provider || 'chatgpt2api').slice(0, 40),
     styleId: String(body?.styleId || '').slice(0, 40),
+    storyId: String(body?.storyId || '').slice(0, 40),
+    shotId: String(body?.shotId || '').slice(0, 40),
+    characterId: String(body?.characterId || '').slice(0, 40),
   };
   if (!brief.direction) throw Object.assign(new Error('请填写创作方向'), { status: 400 });
   return brief;
 }
+
+r.get('/presets', requireAuth, (_req, res) => {
+  res.json({
+    stories: STORY_STRUCTURES,
+    shots: SHOT_RECIPES,
+    characters: CHARACTER_CARDS,
+  });
+});
 
 r.get('/styles', requireAuth, (_req, res) => {
   res.json({ styles: STYLE_PRESETS });
@@ -96,6 +108,9 @@ r.post('/batch', requireAuth, (req, res) => {
       chain: req.body?.chain === true,
       provider: String(req.body?.provider || 'chatgpt2api').slice(0, 40),
       styleId: String(req.body?.styleId || '').slice(0, 40),
+      storyId: String(req.body?.storyId || '').slice(0, 40),
+      shotId: String(req.body?.shotId || '').slice(0, 40),
+      characterId: String(req.body?.characterId || '').slice(0, 40),
     };
     const lines = String(req.body?.directions || '')
       .split(/\r?\n/)

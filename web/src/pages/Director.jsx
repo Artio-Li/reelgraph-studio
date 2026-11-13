@@ -40,6 +40,9 @@ export default function Director() {
     chain: false,
     provider: 'chatgpt2api',
     styleId: 'ugc_phone',
+    storyId: 'hook_first',
+    shotId: 'classic_three',
+    characterId: '',
   });
   const [batchText, setBatchText] = useState('');
   const [refs, setRefs] = useState([]);
@@ -48,6 +51,7 @@ export default function Director() {
   const [generating, setGenerating] = useState(false);
   const [providers, setProviders] = useState([]);
   const [styles, setStyles] = useState([]);
+  const [presets, setPresets] = useState({ stories: [], shots: [], characters: [] });
   const fileRef = useRef(null);
   const [plan, setPlan] = useState(null);
   const [planning, setPlanning] = useState(false);
@@ -80,6 +84,13 @@ export default function Director() {
     api.productionStyles()
       .then((out) => setStyles(out.styles || []))
       .catch(() => setStyles([]));
+    api.productionPresets()
+      .then((out) => setPresets({
+        stories: out.stories || [],
+        shots: out.shots || [],
+        characters: out.characters || [],
+      }))
+      .catch(() => setPresets({ stories: [], shots: [], characters: [] }));
   }, []);
 
   const currentSettled = current && !ACTIVE.has(current.status);
@@ -120,6 +131,15 @@ export default function Director() {
     }
   };
 
+  const pickCard = (event) => {
+    const characterId = event.target.value;
+    const card = presets.characters.find((item) => item.id === characterId);
+    const summary = card
+      ? [card.age, card.gender, card.temperament, card.hair, card.outfit, card.accessory].join('，')
+      : '';
+    setForm((prev) => ({ ...prev, characterId, characterDescription: summary || prev.characterDescription }));
+  };
+
   const pickStyle = (event) => {
     const styleId = event.target.value;
     const preset = styles.find((item) => item.id === styleId);
@@ -131,6 +151,8 @@ export default function Director() {
   };
 
   const activeStyle = styles.find((item) => item.id === form.styleId) || null;
+  const activeStory = presets.stories.find((item) => item.id === form.storyId) || null;
+  const activeShot = presets.shots.find((item) => item.id === form.shotId) || null;
   const groupedStyles = useMemo(() => {
     const map = new Map();
     for (const item of styles) {
@@ -314,6 +336,36 @@ export default function Director() {
             </Field>
           </div>
 
+          <div className="mt-1 grid grid-cols-2 gap-3">
+            <Field label="叙事结构" hint="决定镜头按什么顺序讲">
+              <Select value={form.storyId} onChange={set('storyId')}>
+                <option value="">不限</option>
+                {presets.stories.map((item) => (
+                  <option key={item.id} value={item.id}>{item.label}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="镜头配方" hint="开场 / 中段 / 收尾的景别与运镜">
+              <Select value={form.shotId} onChange={set('shotId')}>
+                <option value="">不限</option>
+                {presets.shots.map((item) => (
+                  <option key={item.id} value={item.id}>{item.label}</option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+
+          {activeStory && (
+            <p className="-mt-1 mb-2 text-[10.5px] leading-relaxed text-mist-400">
+              节拍：{activeStory.beats.map((beat) => beat.label).join(' → ')}
+            </p>
+          )}
+          {activeShot && (
+            <p className="-mt-1 mb-2 text-[10.5px] leading-relaxed text-mist-400">
+              开场 {activeShot.grammar.open}　·　中段 {activeShot.grammar.middle}　·　收尾 {activeShot.grammar.close}
+            </p>
+          )}
+
           {activeStyle && (
             <div className="-mt-1 mb-3 rounded-lg border border-ink-700 bg-ink-900/60 px-2.5 py-2 text-[10.5px] leading-relaxed text-mist-400">
               <p className="text-[11px] text-mist-300">{activeStyle.note}</p>
@@ -348,6 +400,15 @@ export default function Director() {
                 <option key={item.id} value={item.id}>
                   {item.label}{item.textModel ? ` · ${item.textModel}` : ''}
                 </option>
+              ))}
+            </Select>
+          </Field>
+
+          <Field label="人物卡" hint="选一个原型会自动填好下方人物设定，可再手动改">
+            <Select value={form.characterId} onChange={pickCard}>
+              <option value="">不指定</option>
+              {presets.characters.map((item) => (
+                <option key={item.id} value={item.id}>{item.label}</option>
               ))}
             </Select>
           </Field>
