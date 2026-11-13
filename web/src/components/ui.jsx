@@ -5,7 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from 'rea
 /* ------------------------------- Button ------------------------------- */
 export function Button({ variant = 'primary', size = 'md', className, loading, children, ...rest }) {
   const base =
-    'inline-flex items-center justify-center gap-2 rounded-xl font-medium transition-all disabled:opacity-45 disabled:cursor-not-allowed select-none';
+    'inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl font-medium transition-all disabled:opacity-45 disabled:cursor-not-allowed select-none';
   const sizes = {
     sm: 'h-8 px-3 text-[13px]',
     md: 'h-10 px-4 text-sm',

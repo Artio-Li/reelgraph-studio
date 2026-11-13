@@ -392,10 +392,16 @@ export default function Director() {
                   value={refPrompt}
                   onChange={(event) => setRefPrompt(event.target.value)}
                   onKeyDown={(event) => { if (event.key === 'Enter') generateRef(); }}
-                  placeholder="或用文字描述人物长相，AI 直接生成参考图"
-                  className="h-8 text-[11.5px]"
+                  placeholder="或用文字描述人物长相，AI 生成参考图"
+                  className="h-8 min-w-0 flex-1 text-[11.5px]"
                 />
-                <Button variant="outline" size="sm" onClick={generateRef} loading={generating}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={generateRef}
+                  loading={generating}
+                  className="h-8 shrink-0 px-3"
+                >
                   <Sparkles size={12} /> 生成
                 </Button>
               </div>
