@@ -39,6 +39,10 @@ export const api = {
   meta: () => request('/api/meta'),
 
   accounts: () => request('/api/accounts'),
+  planProduction: (b) => request('/api/productions/plan', { method: 'POST', body: b }),
+  createProduction: (b) => request('/api/productions', { method: 'POST', body: b }),
+  productions: () => request('/api/productions'),
+  production: (id) => request(`/api/productions/${encodeURIComponent(id)}`),
   refreshQuota: (accountId) => request('/api/accounts/quota', { method: 'POST', body: { accountId } }),
   importAccount: (b) => request('/api/accounts', { method: 'POST', body: b }),
   startCredentialImport: (b) => request('/api/accounts/credential-imports', { method: 'POST', body: b }),

@@ -221,6 +221,23 @@ CREATE TABLE IF NOT EXISTS node_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_node_runs_run ON node_runs(run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_node_runs_cache ON node_runs(user_id, canvas_id, node_id, input_hash, status);
+
+CREATE TABLE IF NOT EXISTS productions (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL,
+  brief_json   TEXT NOT NULL,
+  plan_json    TEXT,
+  canvas_id    TEXT,
+  run_id       TEXT,
+  status       TEXT NOT NULL DEFAULT 'planning',
+  stage        TEXT,
+  error        TEXT,
+  output_json  TEXT,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  finished_at  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_productions_user ON productions(user_id, created_at DESC);
 `);
 
 // 邀请关系（老库自动补列）

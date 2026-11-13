@@ -18,6 +18,8 @@ import teamRoutes from './routes/team.js';
 import chatRoutes from './routes/chat.js';
 import canvasRoutes, { startCanvasScheduler } from './routes/canvases.js';
 import geminiRoutes from './routes/gemini.js';
+import productionRoutes from './routes/productions.js';
+import { startDirectorScheduler } from './director.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -64,6 +66,7 @@ app.use('/api', teamRoutes);
 app.use('/api', chatRoutes);
 app.use('/api', geminiRoutes);
 app.use('/api/canvases', canvasRoutes);
+app.use('/api/productions', productionRoutes);
 app.use('/api', genRoutes);
 
 // OpenAI 兼容对外接口（用 sk- 密钥鉴权，转发到上游）
@@ -112,6 +115,7 @@ function bootstrap() {
 bootstrap();
 startWorker();
 startCanvasScheduler();
+startDirectorScheduler();
 
 app.listen(CFG.port, CFG.host, () => {
   console.log(`[server] 平台后端已启动 http://${CFG.host}:${CFG.port}`);

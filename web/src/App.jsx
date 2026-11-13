@@ -9,6 +9,7 @@ import Accounts from './pages/Accounts.jsx';
 import Bind from './pages/Bind.jsx';
 import Admin from './pages/Admin.jsx';
 import GeminiStudio from './pages/GeminiStudio.jsx';
+import Director from './pages/Director.jsx';
 
 function Boot() {
   return <div className="grid h-full place-items-center bg-ink-900 text-brand-400"><Spinner size={26} /></div>;
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="/canvas" element={<Canvas />} />
           <Route path="/accounts" element={<Accounts />} />
           <Route path="/gemini" element={<GeminiStudio />} />
+          <Route path="/director" element={<Director />} />
           {user?.role === 'admin' && <Route path="/admin" element={<Admin />} />}
         </Route>
 

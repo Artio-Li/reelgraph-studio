@@ -49,7 +49,7 @@ const advancingRuns = new Set();
 let schedulerTimer = null;
 
 function parseJson(value, fallback) {
-  try { return JSON.parse(value); } catch { return fallback; }
+  try { const parsed = JSON.parse(value); return parsed === null ? fallback : parsed; } catch { return fallback; }
 }
 
 function defaultDoc() {
@@ -1154,7 +1154,12 @@ export function startCanvasScheduler() {
   if (schedulerTimer) return schedulerTimer;
   const tick = async () => {
     const runs = db.prepare("SELECT id FROM canvas_runs WHERE status IN ('queued','submitting','processing') ORDER BY created_at LIMIT 30").all();
-    await Promise.allSettled(runs.map((run) => advanceCanvasRun(run.id)));
+    const results = await Promise.allSettled(runs.map((run) => advanceCanvasRun(run.id)));
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.error('[canvas] 推进失败', runs[index].id, result.reason?.message || result.reason);
+      }
+    });
   };
   schedulerTimer = setInterval(() => { tick().catch((error) => console.error('[canvas] 调度失败:', error.message)); }, 2500);
   schedulerTimer.unref?.();

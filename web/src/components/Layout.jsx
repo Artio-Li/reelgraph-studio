@@ -2,7 +2,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import {
   Sparkles, Workflow, KeyRound, LogOut, Search, Sun, Moon, ChevronLeft, ChevronRight,
-  Zap, UserRound, AlertTriangle, Bot, Settings2,
+  Zap, UserRound, AlertTriangle, Bot, Settings2, Clapperboard,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useAuth } from '../store/auth.jsx';
@@ -10,6 +10,7 @@ import { api } from '../lib/api.js';
 
 const NAV = [
   { to: '/create', label: '快捷创作', icon: Sparkles },
+  { to: '/director', label: '自动导演', icon: Clapperboard },
   { to: '/gemini', label: 'AI 创作', icon: Bot },
   { to: '/canvas', label: '无限画布', icon: Workflow },
   { to: '/accounts', label: 'muse 导入', icon: KeyRound },
