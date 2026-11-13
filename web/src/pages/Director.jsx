@@ -39,6 +39,7 @@ export default function Director() {
     characterDescription: '',
     chain: false,
     provider: 'chatgpt2api',
+    styleId: 'ugc_phone',
   });
   const [batchText, setBatchText] = useState('');
   const [refs, setRefs] = useState([]);
@@ -46,6 +47,7 @@ export default function Director() {
   const [refPrompt, setRefPrompt] = useState('');
   const [generating, setGenerating] = useState(false);
   const [providers, setProviders] = useState([]);
+  const [styles, setStyles] = useState([]);
   const fileRef = useRef(null);
   const [plan, setPlan] = useState(null);
   const [planning, setPlanning] = useState(false);
@@ -75,6 +77,9 @@ export default function Director() {
     api.productionProviders()
       .then((out) => setProviders(out.providers || []))
       .catch(() => setProviders([]));
+    api.productionStyles()
+      .then((out) => setStyles(out.styles || []))
+      .catch(() => setStyles([]));
   }, []);
 
   const currentSettled = current && !ACTIVE.has(current.status);
@@ -114,6 +119,27 @@ export default function Director() {
       if (fileRef.current) fileRef.current.value = '';
     }
   };
+
+  const pickStyle = (event) => {
+    const styleId = event.target.value;
+    const preset = styles.find((item) => item.id === styleId);
+    setForm((prev) => ({
+      ...prev,
+      styleId,
+      ...(preset?.aspect ? { size: preset.aspect } : {}),
+    }));
+  };
+
+  const activeStyle = styles.find((item) => item.id === form.styleId) || null;
+  const groupedStyles = useMemo(() => {
+    const map = new Map();
+    for (const item of styles) {
+      const key = item.group || '其他';
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(item);
+    }
+    return [...map.entries()];
+  }, [styles]);
 
   const generateRef = async () => {
     if (refPrompt.trim().length < 4) return toast('请先描述人物长相', 'error');
@@ -274,10 +300,47 @@ export default function Director() {
                 {['9:16', '16:9', '1:1'].map((s) => <option key={s} value={s}>{s}</option>)}
               </Select>
             </Field>
-            <Field label="风格">
-              <Input value={form.style} onChange={set('style')} />
+            <Field label="风格预设">
+              <Select value={form.styleId} onChange={pickStyle}>
+                {groupedStyles.map(([group, items]) => (
+                  <optgroup key={group} label={group}>
+                    {items.map((item) => (
+                      <option key={item.id} value={item.id}>{item.label}</option>
+                    ))}
+                  </optgroup>
+                ))}
+                <option value="">自定义</option>
+              </Select>
             </Field>
           </div>
+
+          {activeStyle && (
+            <div className="-mt-1 mb-3 rounded-lg border border-ink-700 bg-ink-900/60 px-2.5 py-2 text-[10.5px] leading-relaxed text-mist-400">
+              <p className="text-[11px] text-mist-300">{activeStyle.note}</p>
+              {[
+                ['镜头', activeStyle.camera],
+                ['光线', activeStyle.lighting],
+                ['调色', activeStyle.color],
+                ['质感', activeStyle.texture],
+                ['构图', activeStyle.composition],
+              ].map(([key, value]) => (
+                <p key={key} className="mt-0.5">
+                  <span className="mr-1 inline-block w-7 shrink-0 text-mist-500">{key}</span>
+                  {value}
+                </p>
+              ))}
+            </div>
+          )}
+
+          {form.styleId === '' && (
+            <Field label="自定义风格" hint="用一句话描述光线、镜头、材质与色调">
+              <Input
+                value={form.style}
+                onChange={set('style')}
+                placeholder="例如：阴天散射光，长焦压缩，低饱和冷调，轻微手持"
+              />
+            </Field>
+          )}
 
           <Field label="提示词 AI" hint="负责写分镜与修复提示词；选中的不可用时会自动降级">
             <Select value={form.provider} onChange={set('provider')}>

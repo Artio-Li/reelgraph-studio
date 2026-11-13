@@ -11,6 +11,7 @@
 import { CFG } from './config.js';
 import { db, uid, now, priceOf, getSetting } from './db.js';
 import { canvasProvider } from './canvasAI.js';
+import { getStylePreset, styleBaseline } from './styles.js';
 import { signToken } from './auth.js';
 
 const ACTIVE = new Set(['planning', 'running', 'assembling']);
@@ -73,6 +74,11 @@ function shotCountFor(brief) {
 function plannerUserPrompt(brief) {
   const count = shotCountFor(brief);
   const per = Number(brief.shotSeconds) || 10;
+  const preset = getStylePreset(brief.styleId);
+  const styleLine = preset
+    ? styleBaseline(preset)
+    : (brief.style ? `风格：${String(brief.style).slice(0, 300)}` : '');
+  const styleAvoid = preset && preset.negative ? `避免出现：${preset.negative}` : '';
   return [
     `创作方向：${String(brief.direction || '').slice(0, 500)}`,
     brief.keywords ? `关键词：${String(brief.keywords).slice(0, 500)}` : '',
@@ -80,7 +86,8 @@ function plannerUserPrompt(brief) {
     `每镜时长：${per} 秒`,
     `镜头数量：${count} 个`,
     `画幅：${brief.size || '9:16'}`,
-    brief.style ? `风格：${String(brief.style).slice(0, 300)}` : '',
+    styleLine,
+    styleAvoid,
     brief.characterDescription ? `人物设定：${String(brief.characterDescription).slice(0, 300)}` : '',
     `请输出 ${count} 个镜头的 JSON。`,
   ].filter(Boolean).join('\n');
@@ -206,6 +213,7 @@ function validatePlan(plan, brief) {
       }
       : null,
     provider: String(plan.provider || 'unknown'),
+    styleId: String(brief.styleId || ''),
     shots: normalized,
     totalSeconds: total,
     estimatedCost: normalized.reduce(

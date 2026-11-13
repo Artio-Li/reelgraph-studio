@@ -47,6 +47,7 @@ export const api = {
   productionBatches: () => request('/api/productions/batches'),
   retryProduction: (id) => request(`/api/productions/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
   productionProviders: () => request('/api/productions/providers'),
+  productionStyles: () => request('/api/productions/styles'),
   generateReferenceImage: (b) => request('/api/productions/reference-image', { method: 'POST', body: b }),
   refreshQuota: (accountId) => request('/api/accounts/quota', { method: 'POST', body: { accountId } }),
   importAccount: (b) => request('/api/accounts', { method: 'POST', body: b }),
