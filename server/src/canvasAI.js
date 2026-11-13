@@ -129,3 +129,66 @@ export async function analyzeCanvasIdentity({ references = [], frames = [], prov
   };
 }
 
+
+const PROMPT_REPAIR_SYSTEM = `你是视频提示词修复器。用户会给你一条生成失败或质检未通过的视频提示词，以及失败原因。
+请只输出修复后的完整提示词，不要解释、不要 Markdown 代码块。
+要求：
+1. 针对失败原因做具体修正（人物一致性、构图、光线、动作幅度、画面稳定度等）。
+2. 时长描述必须与给定秒数一致，不要出现其他秒数。
+3. 保留原本的创作意图与风格，不要改成另一个故事。
+4. 补齐人物外观、场景、光线来源、机位与动作节奏。`;
+
+/** 挑选第一个可用 Provider（按优先级） */
+export function pickCanvasProvider(preferred) {
+  const order = preferred
+    ? [preferred, 'antigravity', 'chatgpt2api', 'gemini']
+    : ['antigravity', 'chatgpt2api', 'gemini'];
+  for (const id of order) {
+    try {
+      return canvasProvider(id);
+    } catch { /* 未启用，试下一个 */ }
+  }
+  throw Object.assign(new Error('没有可用的 AI Provider，无法修复提示词'), { status: 503 });
+}
+
+/** 根据质检反馈重写提示词；失败时由调用方回退原文 */
+export async function repairVideoPrompt({ prompt, feedback, duration = 10, size = '9:16', provider, model }) {
+  const order = provider
+    ? [provider, 'antigravity', 'chatgpt2api', 'gemini']
+    : ['antigravity', 'chatgpt2api', 'gemini'];
+  const errors = [];
+  for (const id of order) {
+    let selected;
+    try {
+      selected = canvasProvider(id);
+    } catch {
+      continue;
+    }
+    try {
+      const out = await selected.target.generateText({
+        model: model || getSetting(selected.textSetting),
+        messages: [
+          { role: 'system', content: PROMPT_REPAIR_SYSTEM },
+          {
+            role: 'user',
+            content: [
+              `失败原因：${String(feedback || '').slice(0, 600)}`,
+              `镜头时长：${Number(duration) || 10} 秒`,
+              `画幅：${size}`,
+              `原提示词：${String(prompt || '').slice(0, 2000)}`,
+              '请输出修复后的完整提示词。',
+            ].join('\n'),
+          },
+        ],
+        temperature: 0.6,
+      });
+      const text = String(out?.content || '').trim()
+        .replace(/^```[a-z]*/i, '').replace(/```$/, '').trim();
+      if (text.length < 8) throw new Error('修复结果为空');
+      return { prompt: text.slice(0, 1200), provider: selected.id, model: out?.model || null };
+    } catch (error) {
+      errors.push(`${id}: ${String(error.message || error).slice(0, 100)}`);
+    }
+  }
+  throw new Error(`提示词修复失败（${errors.join('；') || '无可用 Provider'}）`);
+}

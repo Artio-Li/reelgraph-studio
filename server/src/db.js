@@ -225,6 +225,7 @@ CREATE INDEX IF NOT EXISTS idx_node_runs_cache ON node_runs(user_id, canvas_id, 
 CREATE TABLE IF NOT EXISTS productions (
   id           TEXT PRIMARY KEY,
   user_id      TEXT NOT NULL,
+  batch_id     TEXT,
   brief_json   TEXT NOT NULL,
   plan_json    TEXT,
   canvas_id    TEXT,
@@ -243,6 +244,10 @@ CREATE INDEX IF NOT EXISTS idx_productions_user ON productions(user_id, created_
 // 邀请关系（老库自动补列）
 try {
   db.exec('ALTER TABLE users ADD COLUMN invited_by TEXT');
+} catch { /* 已存在 */ }
+
+try {
+  db.exec('ALTER TABLE productions ADD COLUMN batch_id TEXT');
 } catch { /* 已存在 */ }
 
 export const uid = (p = '') => p + crypto.randomBytes(9).toString('hex');

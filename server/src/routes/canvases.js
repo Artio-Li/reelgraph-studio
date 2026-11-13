@@ -9,6 +9,7 @@ import {
 } from '../db.js';
 import * as muse from '../muse.js';
 import { applyRealism, realismEnabled } from '../realism.js';
+import { repairVideoPrompt } from '../canvasAI.js';
 import { generateCanvasImage, generateCanvasPrompt } from '../canvasAI.js';
 import { analyzeCanvasIdentity } from '../canvasAI.js';
 import { analyzeVideoQuality, extractIdentityFrames } from '../canvasQuality.js';
@@ -694,8 +695,34 @@ function materializeImageUrls(refs, allRows) {
   return [...new Set((refs || []).map((ref) => materializeImageUrl(ref, allRows)).filter(Boolean))];
 }
 
-async function prepareVideoPayload(run, input, allRows) {
-  const prompt = applyRealism(materializePrompt(input, allRows), 'video');
+async function prepareVideoPayload(run, input, allRows, nodeRowId = null) {
+  let basePrompt = materializePrompt(input, allRows);
+  if (input.qualityFeedback && Number(input.qualityAttempt) > 0 && !input.qualityRepaired) {
+    try {
+      const repaired = await repairVideoPrompt({
+        prompt: basePrompt,
+        feedback: input.qualityFeedback,
+        duration: input.duration,
+        size: input.size,
+      });
+      if (repaired?.prompt) {
+        basePrompt = repaired.prompt;
+        if (nodeRowId) {
+          db.prepare('UPDATE node_runs SET input_json = ?, updated_at = ? WHERE id = ?')
+            .run(JSON.stringify({
+              ...input,
+              repairedPrompt: repaired.prompt,
+              qualityRepaired: true,
+              repairProvider: repaired.provider,
+            }), now(), nodeRowId);
+          console.log('[canvas] 已按质检反馈修复提示词', nodeRowId, 'provider=' + repaired.provider);
+        }
+      }
+    } catch (error) {
+      console.error('[canvas] 提示词修复失败，按原文重试:', error.message);
+    }
+  }
+  const prompt = applyRealism(basePrompt, 'video');
   const identityImages = input.identityRefs
     ? materializeImageUrls(input.identityRefs, allRows)
     : (Array.isArray(input.identityImages) ? input.identityImages : []);
@@ -809,7 +836,7 @@ async function submitNodeRun(run, nodeRow, allRows) {
   }
 
   if (nodeRow.node_type !== 'video') throw new Error(`不支持执行节点类型：${nodeRow.node_type}`);
-  const prepared = await prepareVideoPayload(run, input, allRows);
+  const prepared = await prepareVideoPayload(run, input, allRows, nodeRow.id);
   if (!prepared) return false;
   updateJob(job.id, {
     prompt: prepared.prompt,

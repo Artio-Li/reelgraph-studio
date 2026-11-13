@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import {
-  createProduction, planProduction, listProductions, getProduction, advanceProduction,
+  createProduction, planProduction, listProductions, listBatches, getProduction,
+  advanceProduction, enqueueBatch, retryProduction,
 } from '../director.js';
 import { CFG } from '../config.js';
 
@@ -37,6 +38,39 @@ r.post('/plan', requireAuth, async (req, res) => {
   }
 });
 
+r.post('/batch', requireAuth, (req, res) => {
+  try {
+    const shared = {
+      totalSeconds: Math.min(60, Math.max(5, Number(req.body?.totalSeconds) || 30)),
+      shotSeconds: CFG.videoDurations.includes(Number(req.body?.shotSeconds)) ? Number(req.body.shotSeconds) : 10,
+      size: CFG.sizes.includes(req.body?.size) ? req.body.size : '9:16',
+      style: String(req.body?.style || '').trim().slice(0, 300),
+      characterDescription: String(req.body?.characterDescription || '').trim().slice(0, 300),
+      characterRefs: Array.isArray(req.body?.characterRefs)
+        ? req.body.characterRefs.filter((url) => typeof url === 'string' && url.startsWith('/uploads/')).slice(0, 4)
+        : [],
+      chain: req.body?.chain === true,
+    };
+    const lines = String(req.body?.directions || '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (!lines.length) throw Object.assign(new Error('请至少填写一条创作方向'), { status: 400 });
+    const briefs = lines.slice(0, 20).map((line) => {
+      const [direction, ...rest] = line.split('|');
+      return { ...shared, direction: direction.trim(), keywords: rest.join('|').trim() };
+    });
+    const batch = enqueueBatch(req.user.id, briefs, { name: req.body?.name });
+    res.status(201).json({ batch });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+r.get('/batches', requireAuth, (req, res) => {
+  res.json({ batches: listBatches(req.user.id) });
+});
+
 r.post('/', requireAuth, async (req, res) => {
   try {
     const brief = normalizeBrief(req.body);
@@ -49,6 +83,15 @@ r.post('/', requireAuth, async (req, res) => {
 
 r.get('/', requireAuth, (req, res) => {
   res.json({ productions: listProductions(req.user.id) });
+});
+
+r.post('/:id/retry', requireAuth, async (req, res) => {
+  try {
+    const production = await retryProduction(req.user.id, req.params.id);
+    res.json({ production });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
 });
 
 r.get('/:id', requireAuth, async (req, res) => {

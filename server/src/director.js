@@ -1,14 +1,15 @@
 /**
- * 自动导演（Auto Director）
+ * 自动导演（Auto Director）v2
  *
- * Brief（方向 + 关键词 + 规格）→ Planner（LLM / 规则兜底）→ Validator（硬性校验）
- * → 自动建画布 → 交给现有画布执行器 → 质检/重试 → 分镜板导出成片。
+ * Brief → Planner（LLM / 规则兜底）→ Validator → 自动建画布 → 现有画布执行器
+ * → 质检（失败时按反馈修复提示词后重试）→ 分镜板导出成片。
  *
- * 设计要点：导演不直接调生成接口，而是生成一张画布再走 /api/canvases/:id/runs，
- * 复用 DAG 执行、质检、重试、退款与媒体管理。
+ * v2 新增：
+ * - 批量模式：一个 batch 内多条 brief 串行排队，避免同时打满上游并发；
+ * - 排队状态 queued，由调度器按 directorConcurrency 逐个启动。
  */
 import { CFG } from './config.js';
-import { db, uid, now, priceOf } from './db.js';
+import { db, uid, now, priceOf, getSetting } from './db.js';
 import { canvasProvider } from './canvasAI.js';
 import { signToken } from './auth.js';
 
@@ -22,7 +23,8 @@ const running = new Set();
 
 function parseJson(value, fallback) {
   try {
-    return JSON.parse(value);
+    const parsed = JSON.parse(value);
+    return parsed === null ? fallback : parsed;
   } catch {
     return fallback;
   }
@@ -99,7 +101,7 @@ async function planWithLLM(brief) {
     try {
       selected = canvasProvider(provider);
     } catch {
-      continue; // provider 未启用
+      continue;
     }
     try {
       const out = await selected.target.generateText({
@@ -144,6 +146,10 @@ function planFallback(brief) {
 
 /* ------------------------------ Validator ------------------------------ */
 
+function countGroup(shots, group) {
+  return shots.filter((shot) => shot.chainGroup === group).length;
+}
+
 function validatePlan(plan, brief) {
   const shots = Array.isArray(plan.shots) ? plan.shots : [];
   if (!shots.length) throw fail('分镜为空，无法开始生产');
@@ -158,9 +164,9 @@ function validatePlan(plan, brief) {
     if (prompt.length < 8) throw fail(`镜头 ${index + 1} 的提示词太短`);
     if (prompt.length > 1200) throw fail(`镜头 ${index + 1} 的提示词过长（上限 1200 字）`);
     const seconds = [...prompt.matchAll(/(\d+(?:\.\d+)?)\s*秒/g)]
-      .map((m) => Number(m[1]))
-      .filter((n) => n >= 5);
-    const conflicting = [...new Set(seconds)].filter((n) => n !== duration);
+      .map((match, i) => Number(match[1]))
+      .filter((value) => value >= 5);
+    const conflicting = [...new Set(seconds)].filter((value) => value !== duration);
     if (conflicting.length) {
       throw fail(`镜头 ${index + 1} 的提示词写了 ${conflicting.join('/')} 秒，与节点时长 ${duration} 秒冲突，容易被上游拒绝`);
     }
@@ -174,7 +180,6 @@ function validatePlan(plan, brief) {
     };
   });
 
-  // 续集链分组：每 MAX_CHAIN 段断开一次，避免长链身份漂移
   let group = 0;
   normalized.forEach((shot, i) => {
     if (i === 0 || !shot.continuation) group += 1;
@@ -204,10 +209,6 @@ function validatePlan(plan, brief) {
       0,
     ),
   };
-}
-
-function countGroup(shots, group) {
-  return shots.filter((shot) => shot.chainGroup === group).length;
 }
 
 /* --------------------------- Canvas builder --------------------------- */
@@ -261,7 +262,6 @@ function buildCanvasDoc(plan, brief) {
     data: { label: '成片' },
   });
 
-  // 人物锚点只连每一条续集链的头节点，链内其他节点自动继承
   if (characterId) {
     plan.shots.forEach((shot, i) => {
       if (shot.continuation) return;
@@ -312,6 +312,7 @@ function shapeProduction(row) {
   if (!row) return null;
   return {
     id: row.id,
+    batchId: row.batch_id || null,
     status: row.status,
     stage: row.stage,
     brief: parseJson(row.brief_json, {}),
@@ -359,27 +360,25 @@ export async function planProduction(brief) {
   return { plan, doc, storyboardId };
 }
 
-export async function createProduction(userId, brief) {
-  const id = uid('pr_');
-  const ts = now();
-  db.prepare(
-    `INSERT INTO productions(id, user_id, brief_json, status, stage, created_at, updated_at)
-     VALUES(?,?,?,?,?,?,?)`,
-  ).run(id, userId, JSON.stringify(brief), 'planning', '规划分镜', ts, ts);
-
+/** 真正开始一条生产：规划 → 建画布 → 提交运行 */
+export async function beginProduction(id) {
+  const row = db.prepare('SELECT * FROM productions WHERE id = ?').get(id);
+  if (!row) throw fail('生产任务不存在', 404);
+  const brief = parseJson(row.brief_json, {});
+  patchProduction(id, { status: 'planning', stage: '规划分镜' });
   try {
-    const { plan, doc, storyboardId } = await planProduction(brief);
+    const { plan, doc } = await planProduction(brief);
     patchProduction(id, { plan_json: JSON.stringify(plan), status: 'running', stage: '排队生成' });
 
     const canvasId = uid('cv_');
     db.prepare(
       'INSERT INTO canvases(id, user_id, name, doc_json, rev, created_at, updated_at) VALUES(?,?,?,?,?,?,?)',
-    ).run(canvasId, userId, `自动导演 · ${plan.title}`, JSON.stringify(doc), 1, now(), now());
+    ).run(canvasId, row.user_id, `自动导演 · ${plan.title}`, JSON.stringify(doc), 1, now(), now());
 
-    const out = await internalPost(`/api/canvases/${canvasId}/runs`, userId, {});
-    const runId = out?.run?.id || null;
-    patchProduction(id, { canvas_id: canvasId, run_id: runId, stage: '生成中' });
-    return shapeProduction(db.prepare('SELECT * FROM productions WHERE id = ?').get(id));
+    const out = await internalPost(`/api/canvases/${canvasId}/runs`, row.user_id, {});
+    patchProduction(id, {
+      canvas_id: canvasId, run_id: out?.run?.id || null, stage: '生成中',
+    });
   } catch (error) {
     patchProduction(id, {
       status: 'failed',
@@ -388,6 +387,86 @@ export async function createProduction(userId, brief) {
       finished_at: now(),
     });
     throw error;
+  }
+  return shapeProduction(db.prepare('SELECT * FROM productions WHERE id = ?').get(id));
+}
+
+/** 单条生产：立即开始（保留原有行为） */
+export async function createProduction(userId, brief) {
+  const id = uid('pr_');
+  const ts = now();
+  db.prepare(
+    `INSERT INTO productions(id, user_id, brief_json, status, stage, created_at, updated_at)
+     VALUES(?,?,?,?,?,?,?)`,
+  ).run(id, userId, JSON.stringify(brief), 'planning', '规划分镜', ts, ts);
+  try {
+    await beginProduction(id);
+  } catch (error) {
+    throw error;
+  }
+  return shapeProduction(db.prepare('SELECT * FROM productions WHERE id = ?').get(id));
+}
+
+/** 批量：同一 batch 下按顺序排队，由调度器逐条启动 */
+export function enqueueBatch(userId, briefs, { name = '' } = {}) {
+  if (!Array.isArray(briefs) || !briefs.length) throw fail('批量模式至少需要一条创作方向');
+  if (briefs.length > 20) throw fail('单次批量最多 20 条');
+  const batchId = uid('bt_');
+  const ts = now();
+  const ids = [];
+  for (const brief of briefs) {
+    if (!String(brief.direction || '').trim()) continue;
+    const id = uid('pr_');
+    db.prepare(
+      `INSERT INTO productions(id, user_id, batch_id, brief_json, status, stage, created_at, updated_at)
+       VALUES(?,?,?,?,?,?,?,?)`,
+    ).run(id, userId, batchId, JSON.stringify(brief), 'queued', '排队中', ts, ts);
+    ids.push(id);
+  }
+  if (!ids.length) throw fail('批量内容里没有有效的创作方向');
+  return {
+    batchId,
+    name: String(name || '').slice(0, 60) || `批量 · ${ids.length} 条`,
+    count: ids.length,
+    productions: db.prepare(
+      `SELECT * FROM productions WHERE batch_id = ? ORDER BY created_at`,
+    ).all(batchId).map(shapeProduction),
+  };
+}
+
+function directorConcurrency() {
+  return Math.max(1, Math.min(3, Number(getSetting('directorConcurrency')) || 1));
+}
+
+/** 调度：先按并发上限启动排队任务，再推进进行中的任务 */
+export async function tickDirector() {
+  const limit = directorConcurrency();
+  const active = db.prepare(
+    "SELECT COUNT(*) n FROM productions WHERE status IN ('planning','running','assembling')",
+  ).get().n;
+  const slots = Math.max(0, limit - active);
+  if (slots > 0) {
+    const next = db.prepare(
+      "SELECT id FROM productions WHERE status = 'queued' ORDER BY created_at LIMIT ?",
+    ).all(slots);
+    for (const row of next) {
+      try {
+        await beginProduction(row.id);
+      } catch (error) {
+        console.error('[director] 启动失败:', row.id, error.message);
+      }
+    }
+  }
+
+  const runningRows = db.prepare(
+    "SELECT id FROM productions WHERE status IN ('planning','running','assembling') ORDER BY created_at LIMIT 20",
+  ).all();
+  for (const row of runningRows) {
+    try {
+      await advanceProduction(row.id);
+    } catch (error) {
+      console.error('[director] 推进失败:', error.message);
+    }
   }
 }
 
@@ -420,6 +499,7 @@ export async function advanceProduction(id) {
       const exported = await internalPost(
         `/api/canvases/${row.canvas_id}/storyboards/${storyboardId}/export`, row.user_id, {},
       );
+      const quality = summarizeQuality(row.run_id);
       patchProduction(id, {
         status: 'completed',
         stage: '完成',
@@ -429,6 +509,7 @@ export async function advanceProduction(id) {
           bytes: exported?.export?.bytes,
           totalSeconds: plan.totalSeconds || null,
           shotCount: plan.shots?.length || 0,
+          quality,
         }),
         finished_at: now(),
       });
@@ -444,6 +525,25 @@ export async function advanceProduction(id) {
   }
 }
 
+function summarizeQuality(runId) {
+  const rows = db.prepare('SELECT output_json, status FROM node_runs WHERE run_id = ?').all(runId);
+  let checked = 0;
+  let passed = 0;
+  let retried = 0;
+  let minScore = null;
+  for (const row of rows) {
+    const output = parseJson(row.output_json, {});
+    const report = output.quality;
+    if (!report) continue;
+    checked += 1;
+    if (report.passed) passed += 1;
+    retried += Math.max(0, (output.qualityHistory?.length || 1) - 1);
+    const score = Number(report.score);
+    if (Number.isFinite(score)) minScore = minScore === null ? score : Math.min(minScore, score);
+  }
+  return { checked, passed, retried, minScore };
+}
+
 function findStoryboardId(canvasId) {
   const row = db.prepare('SELECT doc_json FROM canvases WHERE id = ?').get(canvasId);
   if (!row) return null;
@@ -457,10 +557,43 @@ export function listProductions(userId, limit = 20) {
     .map(shapeProduction);
 }
 
+export function listBatches(userId, limit = 10) {
+  const rows = db.prepare(
+    `SELECT batch_id, COUNT(*) total,
+            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) done,
+            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) failed,
+            MIN(created_at) created_at
+     FROM productions
+     WHERE user_id = ? AND batch_id IS NOT NULL
+     GROUP BY batch_id ORDER BY created_at DESC LIMIT ?`,
+  ).all(userId, limit);
+  return rows.map((row) => ({
+    batchId: row.batch_id,
+    total: row.total,
+    done: row.done,
+    failed: row.failed,
+    createdAt: row.created_at,
+    productions: db.prepare(
+      'SELECT * FROM productions WHERE batch_id = ? ORDER BY created_at',
+    ).all(row.batch_id).map(shapeProduction),
+  }));
+}
+
 export function getProduction(userId, id) {
   const row = db.prepare('SELECT * FROM productions WHERE id = ? AND user_id = ?').get(id, userId);
   if (!row) throw fail('生产任务不存在', 404);
   return shapeProduction(row);
+}
+
+export async function retryProduction(userId, id) {
+  const row = db.prepare('SELECT * FROM productions WHERE id = ? AND user_id = ?').get(id, userId);
+  if (!row) throw fail('生产任务不存在', 404);
+  if (ACTIVE.has(row.status) || row.status === 'queued') throw fail('任务仍在进行中', 409);
+  patchProduction(id, {
+    status: 'queued', stage: '排队中', error: null, output_json: null,
+    canvas_id: null, run_id: null, finished_at: null,
+  });
+  return shapeProduction(db.prepare('SELECT * FROM productions WHERE id = ?').get(id));
 }
 
 let schedulerTimer = null;
@@ -468,16 +601,13 @@ let schedulerTimer = null;
 export function startDirectorScheduler() {
   if (schedulerTimer) return schedulerTimer;
   const tick = async () => {
-    const rows = db.prepare("SELECT id FROM productions WHERE status IN ('planning','running','assembling') ORDER BY created_at LIMIT 20").all();
-    for (const row of rows) {
-      try {
-        await advanceProduction(row.id);
-      } catch (error) {
-        console.error('[director] 推进失败:', error.message);
-      }
+    try {
+      await tickDirector();
+    } catch (error) {
+      console.error('[director] 调度异常:', error.message);
     }
   };
-  schedulerTimer = setInterval(() => { tick().catch((error) => console.error('[director] 调度异常:', error.message)); }, 5000);
+  schedulerTimer = setInterval(tick, 5000);
   schedulerTimer.unref?.();
   return schedulerTimer;
 }
