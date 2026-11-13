@@ -7,6 +7,7 @@ import '@xyflow/react/dist/style.css';
 import {
   Box, Film, Image as ImageIcon, LayoutGrid, Loader2, Play, Plus, RefreshCw,
   Save, Sparkles, Trash2, Type, Upload, X, Bot, Wand2, Download, SkipBack, SkipForward,
+  ChevronUp, ChevronDown, Music,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { api } from '../lib/api.js';
@@ -27,6 +28,7 @@ const LINK_RULES = new Set([
   'geminiPrompt:text>geminiImage:prompt',
   'geminiPrompt:text>video:prompt',
   'image:image>geminiImage:ref',
+  'geminiImage:image>geminiImage:ref',
   'video:video>video:continuation',
   'video:video>storyboard:clip',
 ]);
@@ -130,11 +132,12 @@ function ImageNode({ data }) {
 }
 
 function GeminiPromptNode({ data }) {
+  const runtime = data.__runtime;
   return (
     <Card tone="violet">
-      <Header icon={Wand2} title={nodeTitle(data, 'AI 提示词')} tag="AI · TEXT" />
+      <Header icon={Wand2} title={nodeTitle(data, 'AI 提示词')} tag="AI · TEXT" runtime={runtime} />
       <p className="nodrag nowheel h-24 overflow-y-auto whitespace-pre-wrap break-words px-3 py-2.5 text-[10px] leading-relaxed text-mist-300 [overflow-wrap:anywhere]">
-        {data.content || data.keywords || '在右侧输入关键词并生成'}
+        {runtime?.content || data.content || data.keywords || '在右侧输入关键词并生成'}
       </p>
       <Handle type="source" id="text" position={Position.Right} className="!h-2.5 !w-2.5 !border-violet-300 !bg-violet-500" />
     </Card>
@@ -142,12 +145,14 @@ function GeminiPromptNode({ data }) {
 }
 
 function GeminiImageNode({ data }) {
+  const runtime = data.__runtime;
+  const imageUrl = runtime?.mediaUrl || data.url;
   return (
     <Card tone="sky">
-      <Header icon={Bot} title={nodeTitle(data, 'AI 人物图')} tag="AI · IMAGE" />
-      {data.url
-        ? <img src={data.url} alt="AI 人物图" className="nodrag h-36 w-full object-cover" />
-        : <div className="grid h-28 place-items-center px-3 text-center text-[10px] text-mist-400">连接提示词和参考图后，在右侧点击生成</div>}
+      <Header icon={Bot} title={nodeTitle(data, 'AI 人物图')} tag="AI · IMAGE" runtime={runtime} />
+      {imageUrl
+        ? <img src={imageUrl} alt="AI 人物图" className="nodrag h-36 w-full object-cover" />
+        : <div className="grid h-28 place-items-center px-3 text-center text-[10px] text-mist-400">连接提示词和参考图后，可运行节点或整张工作流</div>}
       <div className="px-3 py-2 font-mono text-[9px] text-mist-400">{data.size || '9:16'} · {data.resolution || '1K'}</div>
       <Handle type="target" id="prompt" position={Position.Left} style={{ top: '34%' }} className="!h-2.5 !w-2.5 !border-violet-300 !bg-violet-500" />
       <Handle type="target" id="ref" position={Position.Left} style={{ top: '70%' }} className="!h-2.5 !w-2.5 !border-sky-300 !bg-sky-500" />
@@ -186,7 +191,9 @@ function VideoNode({ data }) {
         </div>
       )}
       <div className="flex items-center justify-between px-3 py-2 font-mono text-[9px] text-mist-400">
-        <span>{data.duration || 5}s</span><span>{data.size || '16:9'}</span>
+        <span>{data.duration || 5}s</span>
+        {runtime?.quality?.score != null && <span className={runtime.quality.passed ? 'text-emerald-300' : 'text-amber-300'}>质检 {runtime.quality.score}</span>}
+        <span>{data.size || '16:9'}</span>
       </div>
       <Handle type="target" id="prompt" position={Position.Left} style={{ top: '24%' }} className="!h-2.5 !w-2.5 !border-brand-300 !bg-brand-500" title="提示词" />
       <Handle type="target" id="ref" position={Position.Left} style={{ top: '53%' }} className="!h-2.5 !w-2.5 !border-sky-400 !bg-sky-400" title="参考图" />
@@ -240,7 +247,10 @@ function StoryboardPreview({ clips }) {
   );
 }
 
-function Inspector({ node, updateNode, removeNode, uploadBusy, onUpload, onRun, runBusy, onRunAi, aiBusy, geminiMeta, onExportStoryboard, exportBusy }) {
+function Inspector({
+  node, updateNode, removeNode, uploadBusy, onUpload, onUploadAudio, onRun, runBusy,
+  onRunAi, aiBusy, geminiMeta, onExportStoryboard, exportBusy, onUpdateClip, onMoveClip,
+}) {
   if (!node) {
     return (
       <div className="px-4 py-6 text-[12px] leading-relaxed text-mist-400">
@@ -355,6 +365,42 @@ function Inspector({ node, updateNode, removeNode, uploadBusy, onUpload, onRun, 
               </select>
             </label>
           </div>
+          <div className="rounded-lg border border-ink-600 bg-ink-900/60 p-3">
+            <label className="flex items-center justify-between gap-3 text-[11px] text-mist-200">
+              <span>生成后自动质检</span>
+              <input type="checkbox" checked={data.qualityControl !== false} onChange={(e) => patch({ qualityControl: e.target.checked })} />
+            </label>
+            {data.qualityControl !== false && (
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <label className="text-[10px] text-mist-400">通过分数
+                  <input type="number" min="50" max="95" value={data.qualityThreshold || 75} onChange={(e) => patch({ qualityThreshold: Number(e.target.value) })} className="mt-1 w-full rounded border border-ink-600 bg-ink-950 px-2 py-1.5 text-[11px]" />
+                </label>
+                <label className="text-[10px] text-mist-400">自动重试
+                  <select value={data.qualityMaxRetries ?? 1} onChange={(e) => patch({ qualityMaxRetries: Number(e.target.value) })} className="mt-1 w-full rounded border border-ink-600 bg-ink-950 px-2 py-1.5 text-[11px]">
+                    {[0, 1, 2].map((value) => <option key={value} value={value}>{value} 次</option>)}
+                  </select>
+                </label>
+              </div>
+            )}
+            {data.__runtime?.quality && (
+              <div className="mt-3 rounded border border-white/5 px-2 py-2 text-[10px] leading-relaxed text-mist-300">
+                <div className="flex justify-between"><span>最近质检</span><span className={data.__runtime.quality.passed ? 'text-emerald-300' : 'text-amber-300'}>{data.__runtime.quality.score} 分</span></div>
+                {!!data.__runtime.quality.issues?.length && <p className="mt-1 text-mist-400">{data.__runtime.quality.issues.join('；')}</p>}
+                {data.__runtime.quality.identity?.faceSimilarity != null && <p className="mt-1 text-violet-300">人脸相似度 {data.__runtime.quality.identity.faceSimilarity} · {data.__runtime.quality.identity.identityDrift ? '检测到身份漂移' : '身份稳定'}</p>}
+              </div>
+            )}
+            {(data.__runtime?.qualityHistory || []).length > 1 && (
+              <div className="mt-2 space-y-1 text-[9px] text-mist-400">
+                <p>质检尝试记录</p>
+                {data.__runtime.qualityHistory.map((attempt) => (
+                  <a key={attempt.attempt} href={attempt.mediaUrl || '#'} target="_blank" rel="noreferrer" className="flex justify-between rounded border border-white/5 px-2 py-1 hover:text-white">
+                    <span>第 {attempt.attempt} 版</span><span>{attempt.quality?.score ?? '—'} 分</span>
+                  </a>
+                ))}
+              </div>
+            )}
+            <p className="mt-2 text-[9px] leading-relaxed text-mist-500">接入人物身份锚点后，会抽取视频帧交给已配置的视觉 Provider 做人脸相似度检测；不达标时按上限自动重试并保留历史版本。</p>
+          </div>
           <button onClick={() => onRun([node.id], false)} disabled={runBusy} className="flex w-full items-center justify-center gap-2 rounded-lg brand-gradient px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
             {runBusy ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />} 运行此节点
           </button>
@@ -365,7 +411,36 @@ function Inspector({ node, updateNode, removeNode, uploadBusy, onUpload, onRun, 
         <>
           <div>
             <p className="mb-2 text-[11px] text-mist-300">顺序预览</p>
-            <StoryboardPreview clips={data.__clips || []} />
+            <StoryboardPreview clips={(data.__clips || []).filter((clip) => clip.url)} />
+          </div>
+          <div className="space-y-2">
+            {(data.__clips || []).map((clip, index) => (
+              <div key={clip.edgeId} className="rounded-lg border border-ink-600 bg-ink-900/60 p-2.5">
+                <div className="mb-2 flex items-center gap-2 text-[10px] text-mist-200">
+                  <span className="min-w-0 flex-1 truncate">{index + 1}. {clip.label}</span>
+                  <button onClick={() => onMoveClip(node.id, clip.edgeId, -1)} disabled={index === 0} className="rounded p-1 hover:bg-white/10 disabled:opacity-25"><ChevronUp size={12} /></button>
+                  <button onClick={() => onMoveClip(node.id, clip.edgeId, 1)} disabled={index === data.__clips.length - 1} className="rounded p-1 hover:bg-white/10 disabled:opacity-25"><ChevronDown size={12} /></button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="text-[9px] text-mist-400">片头裁剪(秒)<input type="number" min="0" step="0.1" value={clip.trimStart || 0} onChange={(e) => onUpdateClip(clip.edgeId, { trimStart: Number(e.target.value) })} className="mt-1 w-full rounded border border-ink-600 bg-ink-950 px-2 py-1" /></label>
+                  <label className="text-[9px] text-mist-400">片尾裁剪(秒)<input type="number" min="0" step="0.1" value={clip.trimEnd || 0} onChange={(e) => onUpdateClip(clip.edgeId, { trimEnd: Number(e.target.value) })} className="mt-1 w-full rounded border border-ink-600 bg-ink-950 px-2 py-1" /></label>
+                  <label className="text-[9px] text-mist-400">原声音量<input type="number" min="0" max="2" step="0.1" value={clip.volume ?? 1} onChange={(e) => onUpdateClip(clip.edgeId, { volume: Number(e.target.value) })} className="mt-1 w-full rounded border border-ink-600 bg-ink-950 px-2 py-1" /></label>
+                  <label className="text-[9px] text-mist-400">转场<select value={clip.transition || 'cut'} onChange={(e) => onUpdateClip(clip.edgeId, { transition: e.target.value })} className="mt-1 w-full rounded border border-ink-600 bg-ink-950 px-2 py-1"><option value="cut">硬切</option><option value="fade">淡化</option></select></label>
+                </div>
+                {clip.transition === 'fade' && <label className="mt-2 block text-[9px] text-mist-400">转场时长(秒)<input type="number" min="0.1" max="1.5" step="0.05" value={clip.transitionDuration || 0.35} onChange={(e) => onUpdateClip(clip.edgeId, { transitionDuration: Number(e.target.value) })} className="mt-1 w-full rounded border border-ink-600 bg-ink-950 px-2 py-1" /></label>}
+              </div>
+            ))}
+          </div>
+          <label className="block text-[11px] text-mist-300">导出画幅
+            <select value={data.outputSize || 'source'} onChange={(e) => patch({ outputSize: e.target.value })} className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-2 text-[12px]"><option value="source">跟随首个片段</option><option value="16:9">16:9 横屏</option><option value="9:16">9:16 竖屏</option><option value="1:1">1:1 方形</option></select>
+          </label>
+          <div>
+            <p className="mb-1.5 text-[11px] text-mist-300">背景音乐（可选）</p>
+            <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-ink-500 px-3 py-2.5 text-[11px] text-mist-300 hover:border-brand-500 hover:text-brand-300">
+              {uploadBusy ? <Loader2 size={13} className="animate-spin" /> : <Music size={13} />}{data.bgmUrl ? '替换背景音乐' : '上传背景音乐'}
+              <input type="file" accept="audio/*" className="hidden" disabled={uploadBusy} onChange={(e) => onUploadAudio(node.id, e.target.files?.[0])} />
+            </label>
+            {data.bgmUrl && <label className="mt-2 block text-[10px] text-mist-400">背景音乐音量<input type="range" min="0" max="1" step="0.05" value={data.bgmVolume ?? 0.25} onChange={(e) => patch({ bgmVolume: Number(e.target.value) })} className="mt-1 w-full" /></label>}
           </div>
           <button onClick={() => onExportStoryboard(node)} disabled={exportBusy || !(data.__clips || []).length} className="flex w-full items-center justify-center gap-2 rounded-lg brand-gradient px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
             {exportBusy ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} 拼接并导出 MP4
@@ -375,7 +450,7 @@ function Inspector({ node, updateNode, removeNode, uploadBusy, onUpload, onRun, 
               <Download size={12} /> 下载已导出的成片
             </a>
           )}
-          <p className="text-[10px] leading-relaxed text-mist-400">片段顺序按连接到分镜板的先后排列。导出时会统一画幅、帧率和音轨后无缝拼接。</p>
+          <p className="text-[10px] leading-relaxed text-mist-400">支持顺序调整、片头片尾裁剪、原声音量、淡化转场、统一画幅与背景音乐混音。</p>
         </>
       )}
       <button onClick={() => removeNode(node.id)} className="flex w-full items-center justify-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-300 hover:bg-rose-500/20">
@@ -424,8 +499,18 @@ export default function Canvas() {
       const clips = incoming.map((edge) => {
         const source = nodes.find((node) => node.id === edge.source);
         const state = runtime.get(edge.source);
-        return state?.mediaUrl ? { nodeId: edge.source, label: source?.data?.label || '视频片段', url: state.mediaUrl } : null;
-      }).filter(Boolean);
+        return {
+          edgeId: edge.id,
+          nodeId: edge.source,
+          label: source?.data?.label || '视频片段',
+          url: state?.mediaUrl || '',
+          trimStart: Number(edge.data?.trimStart) || 0,
+          trimEnd: Number(edge.data?.trimEnd) || 0,
+          volume: Number.isFinite(Number(edge.data?.volume)) ? Number(edge.data.volume) : 1,
+          transition: edge.data?.transition === 'fade' ? 'fade' : 'cut',
+          transitionDuration: Number(edge.data?.transitionDuration) || 0.35,
+        };
+      });
       result.set(board.id, clips);
     }
     return result;
@@ -436,12 +521,14 @@ export default function Canvas() {
       const refs = new Set((character.data?.refs || []).filter(Boolean));
       for (const edge of edges.filter((edge) => edge.target === character.id && edge.targetHandle === 'image')) {
         const source = nodes.find((node) => node.id === edge.source);
-        if (source?.data?.url) refs.add(source.data.url);
+        const sourceUrl = runtime.get(edge.source)?.mediaUrl || source?.data?.url;
+        if (sourceUrl) refs.add(sourceUrl);
+        else if (source?.type === 'geminiImage') refs.add(`pending:${source.id}`);
       }
       result.set(character.id, refs.size);
     }
     return result;
-  }, [edges, nodes]);
+  }, [edges, nodes, runtime]);
   const displayNodes = useMemo(() => nodes.map((node) => ({
     ...node,
     data: {
@@ -647,8 +734,8 @@ export default function Canvas() {
       geminiPrompt: { label: 'AI 提示词', keywords: '', template: '', content: '', duration: 10, size: '9:16', provider: geminiMeta?.defaultProvider || 'gemini', model: geminiMeta?.defaults?.text || '' },
       geminiImage: { label: 'AI 人物图', prompt: '', url: '', size: '9:16', resolution: '1K', provider: geminiMeta?.defaultProvider || 'gemini', model: geminiMeta?.defaults?.image || '' },
       character: { label: '人物身份锚点', description: '' },
-      video: { label: '视频生成', prompt: '', duration: 5, size: '16:9' },
-      storyboard: { label: '分镜板' },
+      video: { label: '视频生成', prompt: '', duration: 5, size: '16:9', qualityControl: true, qualityThreshold: 75, qualityMaxRetries: 1 },
+      storyboard: { label: '分镜板', outputSize: 'source', bgmUrl: '', bgmVolume: 0.25 },
     };
     const node = { id: newId(), type, position: { x: point.x - 115, y: point.y - 70 }, data: defaults[type] };
     setNodes((current) => [...current, node]);
@@ -656,6 +743,22 @@ export default function Canvas() {
   };
 
   const updateNode = (id, data) => setNodes((items) => items.map((node) => node.id === id ? { ...node, data: { ...node.data, ...data } } : node));
+  const updateClip = (edgeId, data) => setEdges((items) => items.map((edge) => edge.id === edgeId
+    ? { ...edge, data: { ...(edge.data || {}), ...data } }
+    : edge));
+  const moveClip = (boardId, edgeId, direction) => setEdges((items) => {
+    const ordered = items
+      .filter((edge) => edge.target === boardId && edge.targetHandle === 'clip')
+      .sort((a, b) => Number(a.data?.order || 0) - Number(b.data?.order || 0));
+    const index = ordered.findIndex((edge) => edge.id === edgeId);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= ordered.length) return items;
+    [ordered[index], ordered[target]] = [ordered[target], ordered[index]];
+    const orderById = new Map(ordered.map((edge, order) => [edge.id, order]));
+    return items.map((edge) => orderById.has(edge.id)
+      ? { ...edge, data: { ...(edge.data || {}), order: orderById.get(edge.id) } }
+      : edge);
+  });
   const removeNode = (id) => {
     setNodes((items) => items.filter((node) => node.id !== id));
     setEdges((items) => items.filter((edge) => edge.source !== id && edge.target !== id));
@@ -671,6 +774,22 @@ export default function Canvas() {
       if (!uploaded?.url) throw new Error('上传未返回图片地址');
       updateNode(id, { url: uploaded.url, fileName: uploaded.name });
       toast('图片已上传', 'ok');
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      setUploadBusy(false);
+    }
+  };
+
+  const uploadAudio = async (id, file) => {
+    if (!file) return;
+    setUploadBusy(true);
+    try {
+      const out = await api.upload([file]);
+      const uploaded = out.files?.[0];
+      if (!uploaded?.url || !uploaded?.mime?.startsWith('audio/')) throw new Error('上传未返回有效音频');
+      updateNode(id, { bgmUrl: uploaded.url, bgmName: uploaded.name });
+      toast('背景音乐已上传', 'ok');
     } catch (error) {
       toast(error.message, 'error');
     } finally {
@@ -740,7 +859,14 @@ export default function Canvas() {
       const identityText = preview.identityAnchored
         ? `\n身份锁定覆盖 ${preview.identityAnchored} 个节点，其中 ${preview.inheritedIdentityAnchors || 0} 个由续集链自动继承。`
         : '\n未检测到人物身份锚点，本次只依赖普通参考素材。';
-      if (preview.estimatedCost > 0 && !window.confirm(`将生成 ${preview.toGenerate} 个视频节点${cacheText}，预计消耗 ${preview.estimatedCost} 积分。${identityText}\n继续吗？`)) return;
+      const counts = preview.typeCounts || {};
+      const workflowText = [
+        counts.geminiPrompt ? `${counts.geminiPrompt} 个 AI 提示词` : '',
+        counts.geminiImage ? `${counts.geminiImage} 个 AI 图片` : '',
+        counts.video ? `${counts.video} 个视频` : '',
+      ].filter(Boolean).join('、');
+      const retryText = preview.maxRetryCost ? `\n若质量检测触发全部自动重试，最多额外消耗 ${preview.maxRetryCost} 积分。` : '';
+      if (preview.estimatedCost > 0 && !window.confirm(`将按依赖顺序执行 ${workflowText || `${preview.toGenerate} 个节点`}${cacheText}，基础预计消耗 ${preview.estimatedCost} 积分。${identityText}${retryText}\n继续吗？`)) return;
       const out = await api.runCanvas(canvas.id, body);
       setLatestRun(out.run);
       if (!ACTIVE.has(out.run.status)) {
@@ -834,7 +960,7 @@ export default function Canvas() {
           <button onClick={() => run([], true)} disabled={runBusy || ACTIVE.has(latestRun?.status)} title="忽略历史缓存，重新生成新的变体" className="flex items-center gap-1.5 rounded-lg border border-ink-600 px-3 py-2 text-[11px] text-mist-300 hover:text-white disabled:opacity-40"><RefreshCw size={12} /> 强制新变体</button>
           <button onClick={() => run([], false)} disabled={runBusy || ACTIVE.has(latestRun?.status)} className="flex items-center gap-1.5 rounded-lg brand-gradient px-4 py-2 text-[12px] font-medium text-white disabled:opacity-45">
             {runBusy || ACTIVE.has(latestRun?.status) ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-            {ACTIVE.has(latestRun?.status) ? '运行中' : '运行全部视频节点'}
+            {ACTIVE.has(latestRun?.status) ? '运行中' : '运行全部工作流'}
           </button>
         </div>
       </div>
@@ -891,7 +1017,13 @@ export default function Canvas() {
             <span className="text-[12px] font-medium text-white">节点设置</span>
             {selectedNode && <button onClick={() => setSelectedIds([])} className="text-mist-400 hover:text-white"><X size={13} /></button>}
           </div>
-          <Inspector node={selectedNode} updateNode={updateNode} removeNode={removeNode} uploadBusy={uploadBusy} onUpload={uploadImage} onRun={run} runBusy={runBusy} onRunAi={runAiNode} aiBusy={aiBusy} geminiMeta={geminiMeta} onExportStoryboard={exportStoryboard} exportBusy={exportBusy} />
+          <Inspector
+            node={selectedNode} updateNode={updateNode} removeNode={removeNode}
+            uploadBusy={uploadBusy} onUpload={uploadImage} onUploadAudio={uploadAudio}
+            onRun={run} runBusy={runBusy} onRunAi={runAiNode} aiBusy={aiBusy}
+            geminiMeta={geminiMeta} onExportStoryboard={exportStoryboard} exportBusy={exportBusy}
+            onUpdateClip={updateClip} onMoveClip={moveClip}
+          />
           {latestRun && (
             <div className="mx-4 mb-4 rounded-xl border border-ink-600 bg-ink-900 p-3 text-[10px] text-mist-300">
               <div className="mb-2 flex items-center justify-between"><span>最近运行</span><span className={ACTIVE.has(latestRun.status) ? 'text-brand-300' : latestRun.status === 'failed' ? 'text-rose-300' : 'text-emerald-300'}>{latestRun.status}</span></div>

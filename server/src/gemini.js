@@ -140,6 +140,23 @@ async function imagePart(source) {
   };
 }
 
+export async function analyzeImages({ prompt, images = [], model }) {
+  const selected = model || getSetting('geminiTextModel') || FALLBACK_TEXT_MODELS[0].id;
+  const parts = [{ text: String(prompt || '').trim() }];
+  for (const image of images.slice(0, 12)) parts.push(await imagePart(image));
+  const data = await request(`/models/${encodeURIComponent(selected)}:generateContent`, {
+    method: 'POST',
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts }],
+      generationConfig: { temperature: 0.1, maxOutputTokens: 2048, responseMimeType: 'application/json' },
+    }),
+  });
+  const content = (data?.candidates?.[0]?.content?.parts || [])
+    .map((part) => part.text || '').filter(Boolean).join('\n').trim();
+  if (!content) throw new Error('Gemini 视觉质检未返回结果');
+  return { content, model: selected, usage: data.usageMetadata || null };
+}
+
 function imageExtension(mime) {
   if (mime === 'image/jpeg') return '.jpg';
   if (mime === 'image/webp') return '.webp';

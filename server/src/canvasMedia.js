@@ -83,7 +83,7 @@ export async function continuationReferences(videoFile) {
   }
 }
 
-async function probe(file) {
+export async function probeVideo(file) {
   const { stdout } = await run('ffprobe', [
     '-v', 'error', '-print_format', 'json', '-show_streams', '-show_format', file,
   ]);
@@ -98,47 +98,119 @@ async function probe(file) {
   };
 }
 
-export async function mergeVideoClips(files, outputFile) {
-  if (!Array.isArray(files) || !files.length) throw new Error('分镜板还没有可导出的视频');
-  for (const file of files) {
-    if (!file || !fs.existsSync(file)) throw new Error(`分镜视频文件不存在：${path.basename(file || '')}`);
+function targetDimensions(preset, first) {
+  const dimensions = {
+    '16:9': [1280, 720],
+    '9:16': [720, 1280],
+    '1:1': [1080, 1080],
+  }[preset];
+  if (dimensions) return dimensions;
+  return [Math.max(2, Math.floor(first.width / 2) * 2), Math.max(2, Math.floor(first.height / 2) * 2)];
+}
+
+function normalizedClip(value) {
+  if (typeof value === 'string') return { file: value };
+  return value || {};
+}
+
+export async function mergeVideoClips(inputClips, outputFile, options = {}) {
+  if (!Array.isArray(inputClips) || !inputClips.length) throw new Error('分镜板还没有可导出的视频');
+  const clips = inputClips.map(normalizedClip);
+  for (const clip of clips) {
+    if (!clip.file || !fs.existsSync(clip.file)) throw new Error(`分镜视频文件不存在：${path.basename(clip.file || '')}`);
   }
   fs.mkdirSync(TMP_DIR, { recursive: true });
   fs.mkdirSync(path.dirname(outputFile), { recursive: true });
   const workDir = fs.mkdtempSync(path.join(TMP_DIR, 'storyboard-'));
   try {
-    const first = await probe(files[0]);
-    const width = Math.max(2, Math.floor(first.width / 2) * 2);
-    const height = Math.max(2, Math.floor(first.height / 2) * 2);
+    const first = await probeVideo(clips[0].file);
+    const [width, height] = targetDimensions(options.outputSize, first);
     const filter = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30,format=yuv420p`;
     const normalized = [];
-    for (let index = 0; index < files.length; index += 1) {
-      const source = files[index];
-      const meta = await probe(source);
+    for (let index = 0; index < clips.length; index += 1) {
+      const clip = clips[index];
+      const source = clip.file;
+      const meta = await probeVideo(source);
+      const trimStart = Math.max(0, Math.min(Number(clip.trimStart) || 0, Math.max(0, meta.duration - 0.1)));
+      const trimEnd = Math.max(0, Number(clip.trimEnd) || 0);
+      const duration = Math.max(0.1, meta.duration - trimStart - Math.min(trimEnd, Math.max(0, meta.duration - trimStart - 0.1)));
+      const volume = Math.max(0, Math.min(2, Number.isFinite(Number(clip.volume)) ? Number(clip.volume) : 1));
       const target = path.join(workDir, `clip-${String(index).padStart(3, '0')}.mp4`);
-      const args = ['-hide_banner', '-loglevel', 'error', '-i', source];
+      const args = ['-hide_banner', '-loglevel', 'error', '-ss', String(trimStart), '-t', String(duration), '-i', source];
       if (!meta.hasAudio) args.push('-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000');
       args.push(
         '-map', '0:v:0', '-map', meta.hasAudio ? '0:a:0' : '1:a:0',
         '-vf', filter,
+        '-af', `volume=${volume}`,
         '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-threads', '1',
         '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-b:a', '128k',
         '-shortest', '-movflags', '+faststart', '-y', target,
       );
       await run('ffmpeg', args);
-      normalized.push(target);
+      normalized.push({
+        file: target,
+        duration,
+        transition: clip.transition === 'fade' ? 'fade' : 'cut',
+        transitionDuration: Math.max(0.1, Math.min(1.5, Number(clip.transitionDuration) || 0.35)),
+      });
     }
-    const listFile = path.join(workDir, 'clips.txt');
-    fs.writeFileSync(listFile, normalized.map((file) => `file '${path.basename(file)}'`).join('\n'));
-    await run('ffmpeg', [
-      '-hide_banner', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', listFile,
-      '-c', 'copy', '-movflags', '+faststart', '-y', outputFile,
-    ], { cwd: workDir });
+
+    const mergedFile = options.bgmFile ? path.join(workDir, 'visual-track.mp4') : outputFile;
+    const hasFade = normalized.slice(1).some((clip) => clip.transition === 'fade');
+    if (normalized.length === 1) {
+      fs.copyFileSync(normalized[0].file, mergedFile);
+    } else if (!hasFade) {
+      const listFile = path.join(workDir, 'clips.txt');
+      fs.writeFileSync(listFile, normalized.map((clip) => `file '${path.basename(clip.file)}'`).join('\n'));
+      await run('ffmpeg', [
+        '-hide_banner', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', listFile,
+        '-c', 'copy', '-movflags', '+faststart', '-y', mergedFile,
+      ], { cwd: workDir });
+    } else {
+      const args = ['-hide_banner', '-loglevel', 'error'];
+      normalized.forEach((clip) => args.push('-i', clip.file));
+      const filters = [];
+      let videoLabel = '0:v';
+      let audioLabel = '0:a';
+      let timeline = normalized[0].duration;
+      for (let index = 1; index < normalized.length; index += 1) {
+        const clip = normalized[index];
+        const fade = clip.transition === 'fade'
+          ? Math.min(clip.transitionDuration, timeline / 2, clip.duration / 2)
+          : 0.001;
+        const nextVideo = `v${index}`;
+        const nextAudio = `a${index}`;
+        filters.push(`[${videoLabel}][${index}:v]xfade=transition=fade:duration=${fade}:offset=${Math.max(0, timeline - fade)}[${nextVideo}]`);
+        filters.push(`[${audioLabel}][${index}:a]acrossfade=d=${fade}:c1=tri:c2=tri[${nextAudio}]`);
+        videoLabel = nextVideo;
+        audioLabel = nextAudio;
+        timeline += clip.duration - fade;
+      }
+      args.push(
+        '-filter_complex', filters.join(';'), '-map', `[${videoLabel}]`, '-map', `[${audioLabel}]`,
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-threads', '1',
+        '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-b:a', '128k',
+        '-movflags', '+faststart', '-y', mergedFile,
+      );
+      await run('ffmpeg', args);
+    }
+
+    if (options.bgmFile) {
+      if (!fs.existsSync(options.bgmFile)) throw new Error('分镜板背景音乐文件不存在');
+      const bgmVolume = Math.max(0, Math.min(2, Number(options.bgmVolume) || 0.25));
+      await run('ffmpeg', [
+        '-hide_banner', '-loglevel', 'error', '-i', mergedFile, '-stream_loop', '-1', '-i', options.bgmFile,
+        '-filter_complex', `[0:a]volume=1[a0];[1:a]volume=${bgmVolume}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[a]`,
+        '-map', '0:v:0', '-map', '[a]', '-c:v', 'copy', '-c:a', 'aac', '-ar', '48000', '-ac', '2',
+        '-shortest', '-movflags', '+faststart', '-y', outputFile,
+      ]);
+    }
+    const finalMeta = await probeVideo(outputFile);
     return {
       bytes: fs.statSync(outputFile).size,
       width,
       height,
-      duration: normalized.length ? undefined : 0,
+      duration: finalMeta.duration,
     };
   } finally {
     fs.rmSync(workDir, { recursive: true, force: true });

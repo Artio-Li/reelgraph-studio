@@ -47,6 +47,9 @@ try {
     { id: 'text_2', type: 'text', position: { x: 0, y: 240 }, data: { label: '第二段提示词', content: '紧接上一段继续动作' } },
     { id: 'video_2', type: 'video', position: { x: 500, y: 240 }, data: { label: '第二段续集', duration: 5, size: '16:9' } },
     { id: 'board_1', type: 'storyboard', position: { x: 800, y: 100 }, data: { label: '顺序分镜板' } },
+    { id: 'ai_prompt_1', type: 'geminiPrompt', position: { x: 0, y: 500 }, data: { label: 'AI 提示词', keywords: '中国城市夜景，真实手机拍摄', duration: 5, size: '16:9', provider: 'gemini' } },
+    { id: 'ai_image_1', type: 'geminiImage', position: { x: 250, y: 500 }, data: { label: 'AI 人物图', size: '16:9', resolution: '1K', provider: 'gemini' } },
+    { id: 'video_3', type: 'video', position: { x: 500, y: 500 }, data: { label: '完整工作流视频', duration: 5, size: '16:9', qualityControl: true, qualityMaxRetries: 1 } },
   ];
   const edges = [
     { id: 'identity_image', source: 'image_1', sourceHandle: 'image', target: 'character_1', targetHandle: 'image' },
@@ -56,6 +59,9 @@ try {
     { id: 'e3', source: 'video_1', sourceHandle: 'video', target: 'video_2', targetHandle: 'continuation' },
     { id: 'e4', source: 'video_1', sourceHandle: 'video', target: 'board_1', targetHandle: 'clip', data: { order: 0 } },
     { id: 'e5', source: 'video_2', sourceHandle: 'video', target: 'board_1', targetHandle: 'clip', data: { order: 1 } },
+    { id: 'workflow_prompt_image', source: 'ai_prompt_1', sourceHandle: 'text', target: 'ai_image_1', targetHandle: 'prompt' },
+    { id: 'workflow_prompt_video', source: 'ai_prompt_1', sourceHandle: 'text', target: 'video_3', targetHandle: 'prompt' },
+    { id: 'workflow_image_video', source: 'ai_image_1', sourceHandle: 'image', target: 'video_3', targetHandle: 'ref' },
   ];
   const created = await request('/api/canvases', {
     method: 'POST', token,
@@ -70,7 +76,14 @@ try {
   assert.equal(preview.identityAnchored, 2, 'identity anchor must cover the whole continuation chain');
   assert.equal(preview.inheritedIdentityAnchors, 1, 'the second video must inherit the first video identity anchor');
   assert.ok(preview.estimatedCost > 0);
+  const { preview: workflow } = await request(`/api/canvases/${canvasId}/runs/preview`, {
+    method: 'POST', token, body: { targetNodeIds: ['video_3'], force: true },
+  });
+  assert.equal(workflow.total, 3, 'full workflow must include prompt, image, and video nodes');
+  assert.deepEqual(workflow.typeCounts, { geminiPrompt: 1, geminiImage: 1, video: 1 });
+  assert.ok(workflow.maxRetryCost > 0, 'quality retry reserve must be visible in preview');
   console.log(`canvas continuation API test passed (${preview.total} ordered video nodes, ${preview.identityAnchored} identity-locked)`);
+  console.log(`canvas workflow API test passed (${workflow.total} topologically ordered nodes)`);
 } finally {
   if (canvasId) await request(`/api/canvases/${canvasId}`, { method: 'DELETE', token });
 }

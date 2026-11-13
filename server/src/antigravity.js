@@ -154,6 +154,24 @@ async function sourceToDataUrl(source) {
   return `data:${mime};base64,${bytes.toString('base64')}`;
 }
 
+export async function analyzeImages({ prompt, images = [], model }) {
+  const selected = model || getSetting('antigravityTextModel') || FALLBACK_TEXT_MODELS[0].id;
+  const content = [{ type: 'text', text: String(prompt || '').trim() }];
+  for (const image of images.slice(0, 12)) {
+    content.push({ type: 'image_url', image_url: { url: await sourceToDataUrl(image) } });
+  }
+  const data = await request('/chat/completions', {
+    method: 'POST',
+    body: JSON.stringify({
+      model: selected, messages: [{ role: 'user', content }], temperature: 0.1,
+      max_tokens: 2048, response_format: { type: 'json_object' }, stream: false,
+    }),
+  });
+  const result = contentText(data?.choices?.[0]?.message?.content);
+  if (!result) throw new Error('Antigravity 视觉质检未返回结果');
+  return { content: result, model: data?.model || selected, usage: data?.usage || null };
+}
+
 function sizePixels(size) {
   return ({
     '1:1': '1024x1024', '16:9': '1920x1080', '9:16': '1080x1920',

@@ -367,13 +367,13 @@ export function shapeJob(j) {
 }
 
 export function updateJob(id, patch) {
-  const allowed = ['upstream_id', 'status', 'progress', 'result', 'error', 'media_file', 'account_id', 'finished_at', 'refunded'];
+  const allowed = ['prompt', 'params', 'upstream_id', 'status', 'progress', 'result', 'error', 'media_file', 'account_id', 'finished_at', 'refunded'];
   const cols = [];
   const vals = [];
   for (const [k, v] of Object.entries(patch)) {
     if (!allowed.includes(k)) continue;
     cols.push(`${k} = ?`);
-    vals.push(v === undefined ? null : v);
+    vals.push(k === 'params' && v && typeof v === 'object' ? JSON.stringify(v) : (v === undefined ? null : v));
   }
   if (!cols.length) return;
   cols.push('updated_at = ?');
