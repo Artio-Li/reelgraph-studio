@@ -38,10 +38,14 @@ export default function Director() {
     style: '真实拍摄质感，自然光',
     characterDescription: '',
     chain: false,
+    provider: 'chatgpt2api',
   });
   const [batchText, setBatchText] = useState('');
   const [refs, setRefs] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const [refPrompt, setRefPrompt] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [providers, setProviders] = useState([]);
   const fileRef = useRef(null);
   const [plan, setPlan] = useState(null);
   const [planning, setPlanning] = useState(false);
@@ -66,6 +70,12 @@ export default function Director() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  useEffect(() => {
+    api.productionProviders()
+      .then((out) => setProviders(out.providers || []))
+      .catch(() => setProviders([]));
+  }, []);
 
   const currentSettled = current && !ACTIVE.has(current.status);
 
@@ -102,6 +112,22 @@ export default function Director() {
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const generateRef = async () => {
+    if (refPrompt.trim().length < 4) return toast('请先描述人物长相', 'error');
+    if (refs.length >= 4) return toast('参考图最多 4 张', 'error');
+    setGenerating(true);
+    try {
+      const out = await api.generateReferenceImage({ prompt: refPrompt.trim(), provider: form.provider });
+      setRefs((prev) => [...prev, { url: out.image.url }].slice(0, 4));
+      setRefPrompt('');
+      toast(`参考图已生成（${out.image.cost || 0} 积分）`, 'ok');
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      setGenerating(false);
     }
   };
 
@@ -253,6 +279,16 @@ export default function Director() {
             </Field>
           </div>
 
+          <Field label="提示词 AI" hint="负责写分镜与修复提示词；选中的不可用时会自动降级">
+            <Select value={form.provider} onChange={set('provider')}>
+              {(providers.length ? providers : [{ id: 'chatgpt2api', label: 'ChatGPT2API' }]).map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}{item.textModel ? ` · ${item.textModel}` : ''}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
           <Field label="人物设定" hint="可选；填了会在每段提示词里重复，提升一致性">
             <Input
               value={form.characterDescription}
@@ -288,6 +324,18 @@ export default function Director() {
                   添加
                 </button>
               )}
+              <div className="flex w-full items-center gap-2 pt-1">
+                <Input
+                  value={refPrompt}
+                  onChange={(event) => setRefPrompt(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === 'Enter') generateRef(); }}
+                  placeholder="或用文字描述人物长相，AI 直接生成参考图"
+                  className="h-8 text-[11.5px]"
+                />
+                <Button variant="outline" size="sm" onClick={generateRef} loading={generating}>
+                  <Sparkles size={12} /> 生成
+                </Button>
+              </div>
               <input
                 ref={fileRef}
                 type="file"

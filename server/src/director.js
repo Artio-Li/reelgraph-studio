@@ -96,7 +96,11 @@ function extractJson(text) {
 
 async function planWithLLM(brief) {
   const errors = [];
-  for (const provider of PROVIDER_ORDER) {
+  const preferred = String(brief.provider || '').trim();
+  const order = preferred
+    ? [preferred, ...PROVIDER_ORDER.filter((id) => id !== preferred)]
+    : PROVIDER_ORDER;
+  for (const provider of order) {
     let selected;
     try {
       selected = canvasProvider(provider);
@@ -249,6 +253,7 @@ function buildCanvasDoc(plan, brief) {
         qualityThreshold: 75,
         qualityMaxRetries: 1,
         identityCheck: anchorRefs.length > 0,
+        aiProvider: brief.provider || null,
       },
     });
     return id;
@@ -610,4 +615,22 @@ export function startDirectorScheduler() {
   schedulerTimer = setInterval(tick, 5000);
   schedulerTimer.unref?.();
   return schedulerTimer;
+}
+
+/** 可用的提示词 AI（供前端下拉选择） */
+export function listProviders() {
+  const labels = { chatgpt2api: 'ChatGPT2API', antigravity: 'Antigravity', gemini: 'Gemini 官方' };
+  const out = [];
+  for (const id of ['chatgpt2api', 'antigravity', 'gemini']) {
+    try {
+      const selected = canvasProvider(id);
+      out.push({
+        id,
+        label: labels[id] || id,
+        textModel: getSetting(selected.textSetting) || null,
+        imageModel: getSetting(selected.imageSetting) || null,
+      });
+    } catch { /* 未启用 */ }
+  }
+  return out;
 }

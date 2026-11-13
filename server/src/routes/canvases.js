@@ -435,6 +435,7 @@ function resolveVideoInput(doc, byId, node, userId) {
       node.data?.qualityMaxRetries == null ? 1 : Number(node.data.qualityMaxRetries),
     )),
     qualityAttempt: 0,
+    aiProvider: node.data?.aiProvider || null,
   };
   return { input, inputHash: hashInput(input), cost: priceOf('video', input) };
 }
@@ -704,6 +705,7 @@ async function prepareVideoPayload(run, input, allRows, nodeRowId = null) {
         feedback: input.qualityFeedback,
         duration: input.duration,
         size: input.size,
+        provider: input.aiProvider || undefined,
       });
       if (repaired?.prompt) {
         basePrompt = repaired.prompt;

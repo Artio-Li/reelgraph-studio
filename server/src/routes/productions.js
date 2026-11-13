@@ -1,10 +1,16 @@
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   createProduction, planProduction, listProductions, listBatches, getProduction,
-  advanceProduction, enqueueBatch, retryProduction,
+  advanceProduction, enqueueBatch, retryProduction, listProviders,
 } from '../director.js';
-import { CFG } from '../config.js';
+import { CFG, MEDIA_DIR } from '../config.js';
+import { db, uid, now, addCredits, priceOf } from '../db.js';
+import { generateCanvasImage } from '../canvasAI.js';
+
+const UPLOAD_DIR = path.join(CFG.dataDir, 'uploads');
 
 const r = Router();
 
@@ -23,10 +29,42 @@ function normalizeBrief(body) {
         .slice(0, 4)
       : [],
     chain: body?.chain === true,
+    provider: String(body?.provider || 'chatgpt2api').slice(0, 40),
   };
   if (!brief.direction) throw Object.assign(new Error('请填写创作方向'), { status: 400 });
   return brief;
 }
+
+r.get('/providers', requireAuth, (_req, res) => {
+  res.json({ providers: listProviders(), defaultProvider: 'chatgpt2api' });
+});
+
+r.post('/reference-image', requireAuth, async (req, res) => {
+  try {
+    const prompt = String(req.body?.prompt || '').trim().slice(0, 600);
+    if (prompt.length < 4) throw Object.assign(new Error('请先用文字描述人物长相'), { status: 400 });
+    const provider = String(req.body?.provider || 'chatgpt2api');
+    const cost = priceOf('image', {});
+    if (Number(req.user.credits || 0) < cost) {
+      throw Object.assign(new Error(`积分不足，本次需要 ${cost}`), { status: 402 });
+    }
+    const out = await generateCanvasImage({
+      prompt, provider, size: '1:1', resolution: '1K', jobId: uid('ref_'),
+    });
+    const ext = path.extname(out.fileName) || '.png';
+    const filename = `${uid('up_')}${ext}`;
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+    fs.copyFileSync(path.join(MEDIA_DIR, out.fileName), path.join(UPLOAD_DIR, filename));
+    db.prepare('INSERT INTO uploads(id, user_id, filename, mime, bytes, created_at) VALUES(?,?,?,?,?,?)')
+      .run(uid('u_'), req.user.id, filename, out.mime, out.bytes, now());
+    if (cost > 0) addCredits(req.user.id, -cost, '自动导演参考图');
+    res.status(201).json({
+      image: { url: `/uploads/${filename}`, bytes: out.bytes, model: out.model || null, provider, cost },
+    });
+  } catch (error) {
+    res.status(error.status || 502).json({ error: error.message });
+  }
+});
 
 r.post('/plan', requireAuth, async (req, res) => {
   try {
@@ -50,6 +88,7 @@ r.post('/batch', requireAuth, (req, res) => {
         ? req.body.characterRefs.filter((url) => typeof url === 'string' && url.startsWith('/uploads/')).slice(0, 4)
         : [],
       chain: req.body?.chain === true,
+      provider: String(req.body?.provider || 'chatgpt2api').slice(0, 40),
     };
     const lines = String(req.body?.directions || '')
       .split(/\r?\n/)
