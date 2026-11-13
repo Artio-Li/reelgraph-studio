@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Clapperboard, Layers, Loader2, Play, RefreshCw, RotateCcw, Sparkles, Workflow,
+  Clapperboard, ImagePlus, Layers, Loader2, Play, RefreshCw, RotateCcw, Sparkles, Workflow, X,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { api, fmtAgo } from '../lib/api.js';
@@ -40,6 +40,9 @@ export default function Director() {
     chain: false,
   });
   const [batchText, setBatchText] = useState('');
+  const [refs, setRefs] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef(null);
   const [plan, setPlan] = useState(null);
   const [planning, setPlanning] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -86,6 +89,22 @@ export default function Director() {
     return () => clearInterval(timer);
   }, [current, list, loadAll, toast]);
 
+  const onPick = async (files) => {
+    if (!files?.length) return;
+    if (refs.length + files.length > 4) return toast('参考图最多 4 张', 'error');
+    setUploading(true);
+    try {
+      const out = await api.upload(Array.from(files));
+      setRefs((prev) => [...prev, ...(out.files || [])].slice(0, 4));
+      toast('参考图已上传', 'ok');
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
   const draftPlan = async () => {
     if (form.direction.trim().length < 2) return toast('请先填写创作方向', 'error');
     setPlanning(true);
@@ -104,7 +123,7 @@ export default function Director() {
     if (form.direction.trim().length < 2) return toast('请先填写创作方向', 'error');
     setStarting(true);
     try {
-      const out = await api.createProduction(form);
+      const out = await api.createProduction({ ...form, characterRefs: refs.map((item) => item.url) });
       setCurrent(out.production);
       setPlan(null);
       await loadAll();
@@ -122,7 +141,9 @@ export default function Director() {
     if (lines.length > 20) return toast('单次最多 20 条', 'error');
     setStarting(true);
     try {
-      const out = await api.createProductionBatch({ ...form, directions: batchText });
+      const out = await api.createProductionBatch({
+        ...form, directions: batchText, characterRefs: refs.map((item) => item.url),
+      });
       toast(`已提交 ${out.batch.count} 条，串行执行`, 'ok');
       setBatchText('');
       await loadAll();
@@ -238,6 +259,44 @@ export default function Director() {
               onChange={set('characterDescription')}
               placeholder="24 岁女性，黑色短发，米色风衣"
             />
+          </Field>
+
+          <Field label="人物参考图" hint="可选；最多 4 张同一人物的多角度照片，会作为身份锚点贯穿所有镜头">
+            <div className="flex flex-wrap items-center gap-2">
+              {refs.map((ref, index) => (
+                <div key={ref.url} className="relative h-16 w-16 overflow-hidden rounded-lg border border-ink-700">
+                  <img src={ref.url} alt="" className="h-full w-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => setRefs((prev) => prev.filter((item) => item.url !== ref.url))}
+                    className="absolute right-0 top-0 grid h-4 w-4 place-items-center bg-black/70 text-white"
+                  >
+                    <X size={9} />
+                  </button>
+                  <span className="absolute bottom-0 left-0 bg-black/60 px-1 font-mono text-[8px] text-white">
+                    #{index + 1}
+                  </span>
+                </div>
+              ))}
+              {refs.length < 4 && (
+                <button
+                  type="button"
+                  onClick={() => fileRef.current?.click()}
+                  className="flex h-16 w-16 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-ink-600 text-[10px] text-mist-400 transition hover:border-brand-500/50 hover:text-brand-300"
+                >
+                  {uploading ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
+                  添加
+                </button>
+              )}
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                onChange={(event) => onPick(event.target.files)}
+              />
+            </div>
           </Field>
 
           <label className="mt-2 flex items-center gap-2 text-[12px] text-mist-300">
