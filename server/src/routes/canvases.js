@@ -10,7 +10,7 @@ import {
 import * as muse from '../muse.js';
 import { applyRealism, realismEnabled } from '../realism.js';
 import {
-  CONTINUATION_INSTRUCTION, continuationReferences, mergeVideoClips,
+  buildContinuationInstruction, buildIdentityLockInstruction, continuationReferences, mergeVideoClips,
 } from '../canvasMedia.js';
 
 const r = Router();
@@ -204,6 +204,69 @@ function findCached(userId, canvasId, nodeId, inputHash) {
   return null;
 }
 
+function continuationComponentIds(doc, byId, startId) {
+  const adjacent = new Map();
+  for (const node of doc.nodes) {
+    if (node.type === 'video') adjacent.set(node.id, new Set());
+  }
+  for (const edge of doc.edges) {
+    if (edge.sourceHandle !== 'video' || edge.targetHandle !== 'continuation') continue;
+    if (byId.get(edge.source)?.type !== 'video' || byId.get(edge.target)?.type !== 'video') continue;
+    adjacent.get(edge.source)?.add(edge.target);
+    adjacent.get(edge.target)?.add(edge.source);
+  }
+  const found = new Set();
+  const pending = [startId];
+  while (pending.length) {
+    const id = pending.pop();
+    if (found.has(id)) continue;
+    found.add(id);
+    for (const next of adjacent.get(id) || []) pending.push(next);
+  }
+  return found;
+}
+
+function characterImages(doc, byId, character) {
+  const refs = [];
+  for (const imageEdge of inputEdges(doc, character.id, 'image')) {
+    const imageNode = byId.get(imageEdge.source);
+    if (['image', 'geminiImage'].includes(imageNode?.type) && imageNode.data?.url) refs.push(imageNode.data.url);
+  }
+  for (const url of character.data?.refs || []) refs.push(url);
+  return [...new Set(refs.filter(Boolean))];
+}
+
+function resolveIdentityAnchor(doc, byId, node) {
+  const component = continuationComponentIds(doc, byId, node.id);
+  const anchorEdges = doc.edges.filter((edge) => (
+    edge.sourceHandle === 'images'
+    && edge.targetHandle === 'ref'
+    && component.has(edge.target)
+    && byId.get(edge.source)?.type === 'character'
+  ));
+  const anchorIds = [...new Set(anchorEdges.map((edge) => edge.source))];
+  if (anchorIds.length > 1) {
+    throw Object.assign(new Error(`续集链「${node.data?.label || node.id}」接入了多个人物身份锚点；同一条续集链只能锁定一个人物`), { status: 400 });
+  }
+  if (!anchorIds.length) return null;
+  const anchor = byId.get(anchorIds[0]);
+  const images = characterImages(doc, byId, anchor);
+  if (!images.length) {
+    throw Object.assign(new Error(`人物身份锚点「${anchor.data?.label || anchor.id}」还没有接入参考图`), { status: 400 });
+  }
+  if (images.length > 4) {
+    throw Object.assign(new Error(`人物身份锚点「${anchor.data?.label || anchor.id}」最多接入 4 张同一人物参考图`), { status: 400 });
+  }
+  const directlyConnected = anchorEdges.some((edge) => edge.source === anchor.id && edge.target === node.id);
+  return {
+    nodeId: anchor.id,
+    label: String(anchor.data?.label || '人物身份锚点').trim().slice(0, 80),
+    description: String(anchor.data?.description || '').trim().slice(0, 300),
+    images,
+    inherited: !directlyConnected,
+  };
+}
+
 function resolveVideoInput(doc, byId, node, userId) {
   const textParts = inputEdges(doc, node.id, 'prompt').map((edge) => {
     const source = byId.get(edge.source);
@@ -214,29 +277,37 @@ function resolveVideoInput(doc, byId, node, userId) {
   const prompt = textParts.join('\n\n').trim();
   if (prompt.length < 2) throw Object.assign(new Error(`视频节点「${node.data?.label || node.id}」缺少提示词`), { status: 400 });
 
+  const identity = resolveIdentityAnchor(doc, byId, node);
   const refs = [];
   for (const edge of inputEdges(doc, node.id, 'ref')) {
     const source = byId.get(edge.source);
     if (['image', 'geminiImage'].includes(source?.type) && source.data?.url) refs.push(source.data.url);
-    if (source?.type === 'character') {
-      for (const imageEdge of inputEdges(doc, source.id, 'image')) {
-        const imageNode = byId.get(imageEdge.source);
-        if (['image', 'geminiImage'].includes(imageNode?.type) && imageNode.data?.url) refs.push(imageNode.data.url);
-      }
-      for (const url of source.data?.refs || []) refs.push(url);
-    }
   }
-  const images = [...new Set(refs)];
-  if (images.length > 10) throw Object.assign(new Error(`视频节点「${node.data?.label || node.id}」最多可接入 10 张参考图`), { status: 400 });
+  const identityImages = identity?.images || [];
+  const identitySet = new Set(identityImages);
+  const referenceImages = [...new Set(refs)].filter((url) => !identitySet.has(url));
+  const images = [...identityImages, ...referenceImages];
+
+  const continuationEdges = inputEdges(doc, node.id, 'continuation');
+  const continuationFrom = continuationEdges[0]?.source || null;
+  const maxBaseReferences = continuationFrom ? 6 : 10;
+  if (images.length > maxBaseReferences) {
+    const detail = continuationFrom
+      ? '续集模式还会自动加入上一段视频、最后一帧和 2 张运动关键帧，因此身份图和普通参考图合计最多 6 张'
+      : '单个视频节点最多可接入 10 张参考图';
+    throw Object.assign(new Error(`视频节点「${node.data?.label || node.id}」参考素材过多：${detail}`), { status: 400 });
+  }
   for (const url of images) ownedUpload(userId, url);
 
   const duration = CFG.videoDurations.includes(Number(node.data?.duration)) ? Number(node.data.duration) : 5;
   const size = CFG.sizes.includes(node.data?.size) ? node.data.size : '16:9';
-  const continuationEdges = inputEdges(doc, node.id, 'continuation');
-  const continuationFrom = continuationEdges[0]?.source || null;
   const input = {
-    prompt: applyRealism(prompt, 'video'), images, duration, size, model: 'muse-video',
-    realism: realismEnabled(), continuationFrom,
+    prompt: applyRealism(prompt, 'video'), images, identityImages, referenceImages,
+    identitySourceNodeId: identity?.nodeId || null,
+    identityLabel: identity?.label || null,
+    identityDescription: identity?.description || null,
+    identityInherited: !!identity?.inherited,
+    duration, size, model: 'muse-video', realism: realismEnabled(), continuationFrom,
   };
   const inputHash = crypto.createHash('sha256').update(JSON.stringify(input)).digest('hex');
   return { input, inputHash, cost: priceOf('video', input) };
@@ -282,6 +353,8 @@ function planRun(canvasRow, userId, { targetNodeIds = [], force = false } = {}) 
     cached: items.filter((item) => item.cached).length,
     toGenerate: items.filter((item) => !item.cached).length,
     estimatedCost: items.filter((item) => !item.cached).reduce((sum, item) => sum + item.cost, 0),
+    identityAnchored: items.filter((item) => item.input.identityImages?.length).length,
+    inheritedIdentityAnchors: items.filter((item) => item.input.identityImages?.length && item.input.identityInherited).length,
   };
 }
 
@@ -336,8 +409,22 @@ async function submitNodeRun(run, nodeRow, allRows) {
     duration: input.duration,
     size: input.size,
   };
-  if (Array.isArray(input.images) && input.images.length) {
-    payload.images = input.images.map((url) => toReference(run.user_id, url));
+  const identityImages = Array.isArray(input.identityImages) ? input.identityImages : [];
+  const referenceImages = Array.isArray(input.referenceImages)
+    ? input.referenceImages
+    : (identityImages.length ? [] : (Array.isArray(input.images) ? input.images : []));
+  const identityReferences = identityImages.map((url) => toReference(run.user_id, url));
+  const otherReferences = referenceImages.map((url) => toReference(run.user_id, url));
+
+  if (!input.continuationFrom) {
+    payload.images = [...identityReferences, ...otherReferences];
+    const identityInstruction = buildIdentityLockInstruction({
+      startIndex: 1,
+      count: identityReferences.length,
+      label: input.identityLabel,
+      description: input.identityDescription,
+    });
+    if (identityInstruction) payload.prompt = `${identityInstruction}\n\n【本段内容】\n${input.prompt}`;
   }
 
   if (input.continuationFrom) {
@@ -363,8 +450,19 @@ async function submitNodeRun(run, nodeRow, allRows) {
     if (!mediaFile) throw new Error('上一段视频未保存到本地，无法作为续集参考');
     const previousFile = path.join(MEDIA_DIR, mediaFile);
     const references = await continuationReferences(previousFile);
-    payload.prompt = `${CONTINUATION_INSTRUCTION}\n\n【本段后续内容】\n${input.prompt}`;
-    payload.images = [references.lastFrame, ...(payload.images || [])];
+    const motionFrames = references.motionFrames || [];
+    const identityInstruction = buildIdentityLockInstruction({
+      startIndex: 2 + motionFrames.length,
+      count: identityReferences.length,
+      label: input.identityLabel,
+      description: input.identityDescription,
+    });
+    payload.prompt = [
+      buildContinuationInstruction({ motionFrameCount: motionFrames.length }),
+      identityInstruction,
+      `【本段后续内容】\n${input.prompt}`,
+    ].filter(Boolean).join('\n\n');
+    payload.images = [references.lastFrame, ...motionFrames, ...identityReferences, ...otherReferences];
     payload.videos = [references.video];
   }
 
@@ -585,6 +683,8 @@ r.post('/:id/runs/preview', requireAuth, (req, res) => {
       toGenerate: plan.toGenerate,
       estimatedCost: plan.estimatedCost,
       balance: req.user.credits,
+      identityAnchored: plan.identityAnchored,
+      inheritedIdentityAnchors: plan.inheritedIdentityAnchors,
     },
   });
 });
@@ -625,6 +725,9 @@ r.post('/:id/runs', requireAuth, async (req, res) => {
       duration: item.input.duration, size: item.input.size, images: item.input.images,
       realism: item.input.realism,
       continuationFrom: item.input.continuationFrom,
+      identitySourceNodeId: item.input.identitySourceNodeId,
+      identityReferenceCount: item.input.identityImages?.length || 0,
+      identityInherited: item.input.identityInherited,
       canvasId: row.id, canvasRunId: runId, canvasNodeId: item.node.id,
     }, item.cost);
     addCredits(req.user.id, -item.cost, '画布视频节点', job.id);

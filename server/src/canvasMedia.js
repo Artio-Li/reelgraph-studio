@@ -7,13 +7,36 @@ import { CFG } from './config.js';
 const execFileAsync = promisify(execFile);
 const TMP_DIR = path.join(CFG.dataDir, 'tmp');
 
-export const CONTINUATION_INSTRUCTION = `【续集连续性硬性要求】
-这是上一段视频的直接续集。系统同时提供了上一段完整视频【视频1】和上一段最后一帧【图1】；必须优先以它们为连续性基准。
-1. 人物身份、脸部五官、发型发色、服装款式与颜色、配饰、身材比例保持完全一致。
-2. 场景空间、道具位置、时间、天气、光线方向、色温、曝光和整体色调保持连续。
-3. 镜头机位、焦段、构图、运动方向、人物朝向和动作惯性从上一段最后一帧自然承接。
-4. 本段只能生成时间线上紧接着发生的后续内容，不得重演、复述或重复上一段已经发生的动作和镜头。
-5. 开头第一帧应与【图1】视觉连续，再自然发展到本段提示词描述的新动作；禁止跳切、瞬移、换脸、换装或重置场景。`;
+function imageRange(start, count) {
+  if (!count) return '';
+  return count === 1 ? `【图${start}】` : `【图${start}】至【图${start + count - 1}】`;
+}
+
+export function buildIdentityLockInstruction({ startIndex = 1, count = 0, label = '', description = '' } = {}) {
+  if (!count) return '';
+  const range = imageRange(startIndex, count);
+  const identityName = String(label || '人物身份锚点').trim().slice(0, 80);
+  const note = String(description || '').trim().slice(0, 300);
+  return `【人物身份锁定｜最高优先级】
+${range}是“${identityName}”的同一人物多视角身份参考，不是不同人物，也不是可自由混合的风格图。
+1. 每一帧都必须保持该人物可辨认的脸型、五官比例、眼鼻口特征、肤色、年龄感、发型发色和身材比例一致。
+2. 服装、配饰和整体造型以身份参考为准；不得平均脸、换脸、换人、换发型、换装或把参考图特征融合成另一个人。
+3. 角度、表情、光线和动作可以随本段内容变化，但身份特征不能漂移；侧脸、遮挡和运动模糊之后也必须恢复为同一人物。
+4. 身份参考只决定人物身份与造型，不得复制参考图背景，不得把多张参考图生成为多个人。${note ? `\n【身份补充说明】${note}` : ''}`;
+}
+
+export function buildContinuationInstruction({ motionFrameCount = 0 } = {}) {
+  const motionRange = imageRange(2, motionFrameCount);
+  return `【续集连续性硬性要求｜最高优先级】
+这是上一段视频的直接续集。系统提供上一段完整视频【视频1】、精确结束帧【图1】${motionFrameCount ? `，以及结束前的运动关键帧${motionRange}` : ''}。
+1. 【图1】是本段开头的视觉接点；第一帧必须与它自然连续，不能跳切、瞬移、重置构图或重新表演上一段。
+2. 【视频1】用于理解人物、服装、场景、道具、光线、镜头轨迹和已经发生的动作；本段只生成时间线上紧接着发生的新内容。
+${motionFrameCount ? `3. ${motionRange}只用于判断上一段末尾的运动方向、速度和惯性，不是新人物参考；动作、头发、衣料和镜头运动都要顺势延续。` : '3. 动作、头发、衣料和镜头运动必须顺着上一段末尾的方向与惯性继续。'}
+4. 人物身份、五官、发型发色、服装款式与颜色、配饰和身材比例保持一致；禁止换脸、换装、增减人物。
+5. 场景空间、道具位置、时间天气、光线方向、色温曝光和整体色调保持连续。
+6. 镜头机位、焦段、景别、人物朝向、视线方向和运动轴线连续；除非本段提示明确要求，不得反打、越轴或突然改变运镜方向。
+7. 不得复述、重演或循环上一段动作；从上一段最后状态直接发展到“本段后续内容”。`;
+}
 
 async function run(binary, args, options = {}) {
   try {
@@ -34,20 +57,29 @@ function videoMime(file) {
 export async function continuationReferences(videoFile) {
   if (!videoFile || !fs.existsSync(videoFile)) throw new Error('上一段视频文件不存在，无法生成续集');
   fs.mkdirSync(TMP_DIR, { recursive: true });
-  const frameFile = path.join(TMP_DIR, `continuation-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`);
+  const stem = `continuation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const offsets = ['-0.65', '-0.35', '-0.12'];
+  const frameFiles = offsets.map((_, index) => path.join(TMP_DIR, `${stem}-${index}.jpg`));
   try {
-    await run('ffmpeg', [
-      '-hide_banner', '-loglevel', 'error', '-sseof', '-0.12', '-i', videoFile,
-      '-frames:v', '1', '-q:v', '2', '-y', frameFile,
-    ]);
-    const frame = fs.readFileSync(frameFile).toString('base64');
+    for (let index = 0; index < offsets.length; index += 1) {
+      await run('ffmpeg', [
+        '-hide_banner', '-loglevel', 'error', '-sseof', offsets[index], '-i', videoFile,
+        '-frames:v', '1', '-q:v', '2', '-y', frameFiles[index],
+      ]);
+    }
+    const frames = frameFiles.map((file) => ({
+      url: `data:image/jpeg;base64,${fs.readFileSync(file).toString('base64')}`,
+    }));
     const video = fs.readFileSync(videoFile).toString('base64');
     return {
-      lastFrame: { url: `data:image/jpeg;base64,${frame}` },
+      lastFrame: frames[2],
+      motionFrames: frames.slice(0, 2),
       video: { url: `data:${videoMime(videoFile)};base64,${video}` },
     };
   } finally {
-    try { fs.unlinkSync(frameFile); } catch { /* temporary file may not exist */ }
+    for (const file of frameFiles) {
+      try { fs.unlinkSync(file); } catch { /* temporary file may not exist */ }
+    }
   }
 }
 

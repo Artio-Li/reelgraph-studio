@@ -23,10 +23,16 @@ try {
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-an', '-y', second,
   ]);
 
-  const { continuationReferences, mergeVideoClips } = await import('../server/src/canvasMedia.js');
+  const {
+    buildContinuationInstruction, buildIdentityLockInstruction, continuationReferences, mergeVideoClips,
+  } = await import('../server/src/canvasMedia.js');
   const references = await continuationReferences(first);
   assert.match(references.lastFrame.url, /^data:image\/jpeg;base64,/);
+  assert.equal(references.motionFrames.length, 2);
+  for (const frame of references.motionFrames) assert.match(frame.url, /^data:image\/jpeg;base64,/);
   assert.match(references.video.url, /^data:video\/mp4;base64,/);
+  assert.match(buildContinuationInstruction({ motionFrameCount: 2 }), /【图2】至【图3】/);
+  assert.match(buildIdentityLockInstruction({ startIndex: 4, count: 2, label: '测试人物' }), /【图4】至【图5】/);
 
   const result = await mergeVideoClips([first, second], output);
   assert.ok(result.bytes > 0);

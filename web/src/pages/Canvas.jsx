@@ -157,11 +157,13 @@ function GeminiImageNode({ data }) {
 }
 
 function CharacterNode({ data }) {
+  const count = Number(data.__identityRefCount || 0);
   return (
     <Card tone="violet">
-      <Header icon={Box} title={nodeTitle(data, '角色参考')} tag="CHAR" />
+      <Header icon={Box} title={nodeTitle(data, '人物身份锚点')} tag="IDENTITY" />
       <div className="px-3 py-3 text-[10px] leading-relaxed text-mist-300">
-        接入一张或多张图片，统一作为人物、服装与造型参考。
+        <p>接入 1–4 张同一人物图片，锁定脸、发型、服装与身材。</p>
+        <p className={clsx('mt-2 font-mono', count ? 'text-violet-300' : 'text-amber-300')}>已接入 {count}/4 张 · 自动贯穿续集链</p>
       </div>
       <Handle type="target" id="image" position={Position.Left} className="!h-2.5 !w-2.5 !border-sky-400 !bg-sky-400" />
       <Handle type="source" id="images" position={Position.Right} className="!h-2.5 !w-2.5 !border-violet-400 !bg-violet-500" />
@@ -320,7 +322,19 @@ function Inspector({ node, updateNode, removeNode, uploadBusy, onUpload, onRun, 
           <label className="block text-[11px] text-mist-300">图片模型<select value={data.model || providerInfo?.defaults?.image || ''} onChange={(e) => patch({ model: e.target.value })} className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-2 text-[12px]">{(providerInfo?.models?.image || []).map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}</select></label>
           {data.url && <img src={data.url} alt="生成结果" className="max-h-52 w-full rounded-lg bg-black/30 object-contain" />}
           <button onClick={() => onRunAi(node)} disabled={aiBusy || !geminiMeta?.enabled} className="flex w-full items-center justify-center gap-2 rounded-lg brand-gradient px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">{aiBusy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />} 生成人物图</button>
-          <p className="text-[10px] leading-relaxed text-mist-400">将文本连到上方端口、参考图连到下方端口。生成结果可继续连接“角色参考”或“视频生成”。</p>
+          <p className="text-[10px] leading-relaxed text-mist-400">将文本连到上方端口、参考图连到下方端口。生成结果可继续连接“人物身份锚点”或“视频生成”。</p>
+        </>
+      )}
+      {node.type === 'character' && (
+        <>
+          <div className="rounded-lg border border-violet-500/25 bg-violet-500/10 px-3 py-3 text-[10px] leading-relaxed text-violet-100">
+            <p>接入 1–4 张同一人物的正脸、半身或不同角度图片，再把右侧输出连接到续集链中的任意一个视频节点。</p>
+            <p className="mt-2 text-violet-300">当前 {data.__identityRefCount || 0}/4 张。身份会自动传播到整条连续视频链；同一条链只能使用一个身份锚点。</p>
+          </div>
+          <label className="block text-[11px] text-mist-300">
+            身份与造型补充（可选）
+            <textarea value={data.description || ''} maxLength={300} onChange={(e) => patch({ description: e.target.value })} rows={5} className="mt-1.5 w-full resize-y rounded-lg border border-ink-600 bg-ink-900 px-3 py-2 text-[12px] leading-relaxed outline-none focus:border-violet-500" placeholder="例如：锁定左侧人物的脸；服装以全身图为准；所有镜头保持同一发型。" />
+          </label>
         </>
       )}
       {node.type === 'video' && (
@@ -344,7 +358,7 @@ function Inspector({ node, updateNode, removeNode, uploadBusy, onUpload, onRun, 
           <button onClick={() => onRun([node.id], false)} disabled={runBusy} className="flex w-full items-center justify-center gap-2 rounded-lg brand-gradient px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
             {runBusy ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />} 运行此节点
           </button>
-          <p className="text-[10px] leading-relaxed text-mist-400">左侧橙色端口是“续集参考”。从上一段视频的右侧输出拖到这里，系统会自动传入上一段视频和最后一帧，并按顺序生成。</p>
+          <p className="text-[10px] leading-relaxed text-mist-400">左侧橙色端口是“续集参考”。系统会按顺序传入上一段完整视频、最后一帧和 2 张尾部运动关键帧；人物身份锚点会自动贯穿整条续集链。</p>
         </>
       )}
       {node.type === 'storyboard' && (
@@ -416,14 +430,27 @@ export default function Canvas() {
     }
     return result;
   }, [edges, nodes, runtime]);
+  const characterRefCounts = useMemo(() => {
+    const result = new Map();
+    for (const character of nodes.filter((node) => node.type === 'character')) {
+      const refs = new Set((character.data?.refs || []).filter(Boolean));
+      for (const edge of edges.filter((edge) => edge.target === character.id && edge.targetHandle === 'image')) {
+        const source = nodes.find((node) => node.id === edge.source);
+        if (source?.data?.url) refs.add(source.data.url);
+      }
+      result.set(character.id, refs.size);
+    }
+    return result;
+  }, [edges, nodes]);
   const displayNodes = useMemo(() => nodes.map((node) => ({
     ...node,
     data: {
       ...node.data,
       __runtime: runtime.get(node.id) || null,
       ...(node.type === 'storyboard' ? { __clips: storyboardClips.get(node.id) || [] } : {}),
+      ...(node.type === 'character' ? { __identityRefCount: characterRefCounts.get(node.id) || 0 } : {}),
     },
-  })), [nodes, runtime, storyboardClips]);
+  })), [characterRefCounts, nodes, runtime, storyboardClips]);
   const selectedNode = displayNodes.find((node) => selectedIds.includes(node.id)) || null;
 
   const snapshot = useCallback(() => ({
@@ -619,7 +646,7 @@ export default function Canvas() {
       image: { label: '参考图片', url: '' },
       geminiPrompt: { label: 'AI 提示词', keywords: '', template: '', content: '', duration: 10, size: '9:16', provider: geminiMeta?.defaultProvider || 'gemini', model: geminiMeta?.defaults?.text || '' },
       geminiImage: { label: 'AI 人物图', prompt: '', url: '', size: '9:16', resolution: '1K', provider: geminiMeta?.defaultProvider || 'gemini', model: geminiMeta?.defaults?.image || '' },
-      character: { label: '角色参考' },
+      character: { label: '人物身份锚点', description: '' },
       video: { label: '视频生成', prompt: '', duration: 5, size: '16:9' },
       storyboard: { label: '分镜板' },
     };
@@ -710,7 +737,10 @@ export default function Canvas() {
       const body = { targetNodeIds, force };
       const { preview } = await api.previewCanvasRun(canvas.id, body);
       const cacheText = preview.cached ? `，其中 ${preview.cached} 个命中缓存` : '';
-      if (preview.estimatedCost > 0 && !window.confirm(`将生成 ${preview.toGenerate} 个视频节点${cacheText}，预计消耗 ${preview.estimatedCost} 积分。继续吗？`)) return;
+      const identityText = preview.identityAnchored
+        ? `\n身份锁定覆盖 ${preview.identityAnchored} 个节点，其中 ${preview.inheritedIdentityAnchors || 0} 个由续集链自动继承。`
+        : '\n未检测到人物身份锚点，本次只依赖普通参考素材。';
+      if (preview.estimatedCost > 0 && !window.confirm(`将生成 ${preview.toGenerate} 个视频节点${cacheText}，预计消耗 ${preview.estimatedCost} 积分。${identityText}\n继续吗？`)) return;
       const out = await api.runCanvas(canvas.id, body);
       setLatestRun(out.run);
       if (!ACTIVE.has(out.run.status)) {
@@ -813,7 +843,7 @@ export default function Canvas() {
         <aside className="z-10 flex w-14 shrink-0 flex-col items-center gap-2 border-r border-ink-700 bg-ink-850 py-3">
           {[
             ['text', Type, '文本'], ['image', ImageIcon, '图片'], ['geminiPrompt', Wand2, 'AI提示词'],
-            ['geminiImage', Bot, 'AI人物图'], ['character', Box, '角色'],
+            ['geminiImage', Bot, 'AI人物图'], ['character', Box, '身份'],
             ['video', Film, '视频'], ['storyboard', LayoutGrid, '分镜板'],
           ].map(([type, Icon, label]) => (
             <button key={type} onClick={() => addNodeOf(type)} title={`添加${label}节点`} className="grid h-9 w-9 place-items-center rounded-lg border border-ink-600 text-mist-400 hover:border-brand-500/60 hover:bg-brand-500/10 hover:text-brand-300"><Icon size={15} /></button>
