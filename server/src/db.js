@@ -250,6 +250,22 @@ try {
   db.exec('ALTER TABLE productions ADD COLUMN batch_id TEXT');
 } catch { /* 已存在 */ }
 
+try {
+  db.exec('ALTER TABLE jobs ADD COLUMN project_id TEXT');
+} catch { /* 已存在 */ }
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS projects (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  color      TEXT NOT NULL DEFAULT '#4fe3c1',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id, updated_at DESC);
+`);
+
 export const uid = (p = '') => p + crypto.randomBytes(9).toString('hex');
 export const now = () => Date.now();
 
@@ -346,13 +362,13 @@ export function priceOf(type, params = {}) {
 }
 
 /* --------------------------------- jobs --------------------------------- */
-export function createJob(userId, type, prompt, params, cost) {
+export function createJob(userId, type, prompt, params, cost, projectId = null) {
   const id = uid('job_');
   const ts = now();
   db.prepare(
-    `INSERT INTO jobs(id, user_id, type, prompt, params, status, progress, cost, created_at, updated_at)
-     VALUES(?,?,?,?,?,'queued',0,?,?,?)`
-  ).run(id, userId, type, prompt, JSON.stringify(params || {}), cost, ts, ts);
+    `INSERT INTO jobs(id, user_id, type, prompt, params, project_id, status, progress, cost, created_at, updated_at)
+     VALUES(?,?,?,?,?,?,'queued',0,?,?,?)`
+  ).run(id, userId, type, prompt, JSON.stringify(params || {}), projectId || params?.projectId || null, cost, ts, ts);
   return getJob(id);
 }
 
@@ -366,9 +382,18 @@ export function shapeJob(j) {
   let result = null;
   try { params = JSON.parse(j.params || '{}'); } catch { params = {}; }
   try { result = j.result ? JSON.parse(j.result) : null; } catch { result = null; }
+  const mediaFile = j.media_file;
+  let posterUrl = result?.posterUrl || null;
+  if (!posterUrl && mediaFile && /\.(mp4|webm|mov)$/i.test(mediaFile)) {
+    const posterName = mediaFile.replace(/\.[^.]+$/, '.poster.webp');
+    if (fs.existsSync(path.join(MEDIA_DIR, posterName))) {
+      posterUrl = `/media/${posterName}`;
+    }
+  }
   return {
     id: j.id,
     userId: j.user_id,
+    projectId: j.project_id || params?.projectId || null,
     type: j.type,
     prompt: j.prompt,
     params,
@@ -379,8 +404,9 @@ export function shapeJob(j) {
     refunded: !!j.refunded,
     result,
     error: j.error || null,
-    mediaUrl: j.media_file ? `/media/${j.media_file}` : null,
-    mediaFile: j.media_file,
+    mediaUrl: mediaFile ? `/media/${mediaFile}` : (result?.url || null),
+    posterUrl,
+    mediaFile,
     accountId: j.account_id,
     createdAt: j.created_at,
     updatedAt: j.updated_at,
@@ -389,7 +415,7 @@ export function shapeJob(j) {
 }
 
 export function updateJob(id, patch) {
-  const allowed = ['prompt', 'params', 'upstream_id', 'status', 'progress', 'result', 'error', 'media_file', 'account_id', 'finished_at', 'refunded'];
+  const allowed = ['prompt', 'params', 'project_id', 'upstream_id', 'status', 'progress', 'result', 'error', 'media_file', 'account_id', 'finished_at', 'refunded'];
   const cols = [];
   const vals = [];
   for (const [k, v] of Object.entries(patch)) {
@@ -403,12 +429,14 @@ export function updateJob(id, patch) {
   db.prepare(`UPDATE jobs SET ${cols.join(', ')} WHERE id = ?`).run(...vals);
 }
 
-export function listJobs({ userId, type, status, page = 1, pageSize = 24 }) {
+export function listJobs({ userId, type, status, projectId, q, page = 1, pageSize = 24 }) {
   const where = [];
   const args = [];
   if (userId) { where.push('user_id = ?'); args.push(userId); }
   if (type) { where.push('type = ?'); args.push(type); }
   if (status) { where.push('status = ?'); args.push(status); }
+  if (projectId) { where.push('project_id = ?'); args.push(projectId); }
+  if (q) { where.push('prompt LIKE ?'); args.push(`%${String(q).trim()}%`); }
   const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const total = db.prepare(`SELECT COUNT(*) AS n FROM jobs ${w}`).get(...args).n;
   const rows = db

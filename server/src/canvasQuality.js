@@ -1,10 +1,7 @@
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import { probeVideo } from './canvasMedia.js';
-
-const execFileAsync = promisify(execFile);
+import { runMediaBinary } from './ffmpegQueue.js';
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -17,9 +14,9 @@ function round(value, digits = 1) {
 
 async function ffmpeg(args, options = {}) {
   try {
-    return await execFileAsync('ffmpeg', args, { maxBuffer: 32 * 1024 * 1024, ...options });
+    return await runMediaBinary('ffmpeg', args, options);
   } catch (error) {
-    const detail = String(error?.stderr || error?.message || '').trim().slice(0, 800);
+    const detail = String(error?.message || '').replace(/^ffmpeg 处理失败：?/, '').trim().slice(0, 800);
     throw new Error(`视频质检失败${detail ? `：${detail}` : ''}`);
   }
 }
@@ -76,7 +73,36 @@ function detectedDuration(log, pattern) {
   return total;
 }
 
-export async function analyzeVideoQuality(file, { expectedDuration = 0, threshold = 75 } = {}) {
+const DARK_TOLERANT_STYLES = new Set([
+  'noir_moody', 'cyber_neon', 'cinematic_film', 'found_footage', 'retro_8mm', 'retro_vhs',
+]);
+const SOFT_TEXTURE_STYLES = new Set([
+  'chinese_ink', 'vintage_polaroid', 'healing_nature', 'retro_8mm', 'retro_vhs',
+]);
+const STATIC_TOLERANT_STYLES = new Set([
+  'vintage_polaroid', 'found_footage', 'chinese_ink', 'commercial_product', 'commercial_beauty',
+]);
+const STATIC_TOLERANT_SHOTS = new Set(['stable', 'macro', 'classic_three']);
+
+/**
+ * 结合摄影风格与镜头配方动态校准质检阈值，避免将暗调夜景或固定机位特写误判为缺陷。
+ */
+function resolveThresholds({ styleId = '', shotId = '' } = {}) {
+  const darkTolerant = DARK_TOLERANT_STYLES.has(styleId);
+  const softTexture = SOFT_TEXTURE_STYLES.has(styleId);
+  const staticTolerant = STATIC_TOLERANT_STYLES.has(styleId) || STATIC_TOLERANT_SHOTS.has(shotId);
+  return {
+    maxDarkRatio: darkTolerant ? 0.78 : 0.45,
+    maxBlackRatio: darkTolerant ? 0.45 : 0.2,
+    maxBrightRatio: softTexture ? 0.65 : 0.45,
+    minContrast: softTexture ? 6 : 10,
+    minEdgeEnergy: softTexture ? 1.8 : 3.2,
+    minMotion: staticTolerant ? 0.25 : 0.9,
+    maxFreezeRatio: staticTolerant ? 0.75 : 0.35,
+  };
+}
+
+export async function analyzeVideoQuality(file, { expectedDuration = 0, threshold = 75, styleId = '', shotId = '' } = {}) {
   if (!file || !fs.existsSync(file)) throw new Error(`质检视频不存在：${path.basename(file || '')}`);
   const meta = await probeVideo(file);
   const sampleWidth = 160;
@@ -96,6 +122,7 @@ export async function analyzeVideoQuality(file, { expectedDuration = 0, threshol
   const stats = frameStatistics(Buffer.from(stdout), sampleWidth, sampleHeight) || {};
   const blackSeconds = detectedDuration(detection.stderr, /black_duration:([\d.]+)/g);
   const freezeSeconds = detectedDuration(detection.stderr, /freeze_duration:([\d.]+)/g);
+  const rules = resolveThresholds({ styleId, shotId });
   const issues = [];
   let score = 100;
   if (expectedDuration && meta.duration < expectedDuration * 0.8) {
@@ -106,23 +133,23 @@ export async function analyzeVideoQuality(file, { expectedDuration = 0, threshol
     score -= 10;
     issues.push('输出分辨率偏低');
   }
-  if (stats.darkRatio > 0.45 || blackSeconds > meta.duration * 0.2) {
+  if (stats.darkRatio > rules.maxDarkRatio || blackSeconds > meta.duration * rules.maxBlackRatio) {
     score -= 20;
     issues.push('大面积黑场或整体过暗');
   }
-  if (stats.brightRatio > 0.45) {
+  if (stats.brightRatio > rules.maxBrightRatio) {
     score -= 15;
     issues.push('大面积过曝');
   }
-  if (stats.contrast < 10) {
+  if (stats.contrast < rules.minContrast) {
     score -= 12;
-    issues.push('画面对比度过低');
+    issues.push('对比度偏低，画面发灰');
   }
-  if (stats.edgeEnergy < 3.2) {
+  if (stats.edgeEnergy < rules.minEdgeEnergy) {
     score -= 15;
     issues.push('画面疑似持续模糊');
   }
-  if (meta.duration > 2 && (stats.motion < 0.9 || freezeSeconds > meta.duration * 0.35)) {
+  if (meta.duration > 2 && (stats.motion < rules.minMotion || freezeSeconds > meta.duration * rules.maxFreezeRatio)) {
     score -= 20;
     issues.push('疑似长时间静帧或动作停滞');
   }

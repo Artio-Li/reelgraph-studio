@@ -97,13 +97,17 @@ function normalizeMessages(messages) {
   return { system, contents };
 }
 
-export async function generateText({ messages, model, temperature = 0.75, maxOutputTokens = 8192 }) {
+export async function generateText({ messages, model, temperature = 0.75, maxOutputTokens = 8192, jsonMode = false }) {
   const selected = model || getSetting('geminiTextModel') || FALLBACK_TEXT_MODELS[0].id;
   const { system, contents } = normalizeMessages(messages);
   if (!contents.length) throw new Error('Gemini 文本请求缺少用户内容');
   const payload = {
     contents,
-    generationConfig: { temperature, maxOutputTokens },
+    generationConfig: {
+      temperature,
+      maxOutputTokens,
+      ...(jsonMode ? { responseMimeType: 'application/json' } : {}),
+    },
   };
   if (system) payload.systemInstruction = { parts: [{ text: system }] };
   const data = await request(`/models/${encodeURIComponent(selected)}:generateContent`, {

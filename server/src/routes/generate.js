@@ -12,6 +12,7 @@ import * as gemini from '../gemini.js';
 import * as antigravity from '../antigravity.js';
 import * as chatgpt2api from '../chatgpt2api.js';
 import { applyRealism, realismEnabled } from '../realism.js';
+import { listVideoEngines, sanitizeVideoPrompt, submitVideoTask } from '../videoProvider.js';
 
 const r = Router();
 
@@ -41,7 +42,6 @@ const MIME = {
   '.pdf': 'application/pdf',
 };
 
-/** 把平台本地上传的参考素材转成 data URL，上游无需公网访问权限 */
 function toDataUrl(localUrl) {
   const name = path.basename(String(localUrl));
   const root = String(localUrl).startsWith('/media/') ? MEDIA_DIR : UPLOAD_DIR;
@@ -72,6 +72,55 @@ function normalizeRefs(list) {
   return out;
 }
 
+/* ------------------------------ 项目夹 ------------------------------ */
+r.get('/projects', requireAuth, (req, res) => {
+  const rows = db.prepare(
+    `SELECT p.*, (SELECT COUNT(*) FROM jobs j WHERE j.user_id = p.user_id AND j.project_id = p.id) AS job_count
+     FROM projects p WHERE p.user_id = ? ORDER BY p.updated_at DESC`
+  ).all(req.user.id);
+  res.json({
+    projects: rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      color: row.color,
+      jobCount: row.job_count || 0,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    })),
+  });
+});
+
+r.post('/projects', requireAuth, (req, res) => {
+  const name = String(req.body?.name || '').trim().slice(0, 60);
+  if (!name) return res.status(400).json({ error: '请输入项目名称' });
+  const color = /^#[0-9a-f]{6}$/i.test(String(req.body?.color || '')) ? req.body.color : '#4fe3c1';
+  const id = uid('prj_');
+  const ts = now();
+  db.prepare('INSERT INTO projects(id, user_id, name, color, created_at, updated_at) VALUES(?,?,?,?,?,?)')
+    .run(id, req.user.id, name, color, ts, ts);
+  res.status(201).json({
+    project: { id, name, color, jobCount: 0, createdAt: ts, updatedAt: ts },
+  });
+});
+
+r.patch('/projects/:id', requireAuth, (req, res) => {
+  const row = db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!row) return res.status(404).json({ error: '项目不存在' });
+  const name = String(req.body?.name ?? row.name).trim().slice(0, 60) || row.name;
+  const color = /^#[0-9a-f]{6}$/i.test(String(req.body?.color || '')) ? req.body.color : row.color;
+  db.prepare('UPDATE projects SET name = ?, color = ?, updated_at = ? WHERE id = ?')
+    .run(name, color, now(), row.id);
+  res.json({ project: { id: row.id, name, color, createdAt: row.created_at, updatedAt: now() } });
+});
+
+r.delete('/projects/:id', requireAuth, (req, res) => {
+  const row = db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!row) return res.status(404).json({ error: '项目不存在' });
+  db.prepare('UPDATE jobs SET project_id = NULL WHERE user_id = ? AND project_id = ?').run(req.user.id, row.id);
+  db.prepare('DELETE FROM projects WHERE id = ?').run(row.id);
+  res.json({ deleted: true, id: row.id });
+});
+
 /* ------------------------------ 上传 ------------------------------ */
 r.post('/upload', requireAuth, upload.array('files', 10), (req, res) => {
   const files = (req.files || []).map((f) => {
@@ -85,13 +134,24 @@ r.post('/upload', requireAuth, upload.array('files', 10), (req, res) => {
 
 /* ------------------------------ 视频 ------------------------------ */
 r.post('/videos', requireAuth, async (req, res) => {
-  const { prompt, duration = 5, size = '16:9', images = [], model = 'muse-video', extra = null } = req.body || {};
-  if (!prompt || String(prompt).trim().length < 2) {
+  const {
+    prompt, duration = 5, size = '16:9', images = [], model = 'muse-video', extra = null, projectId = null,
+  } = req.body || {};
+  const cleanPrompt = sanitizeVideoPrompt(prompt);
+  if (!cleanPrompt || cleanPrompt.length < 2) {
     return res.status(400).json({ error: '请填写画面描述' });
   }
   const dur = CFG.videoDurations.includes(Number(duration)) ? Number(duration) : 5;
+  const engines = listVideoEngines();
+  const chosenEngine = engines.find((e) => e.id === model) || engines[0];
   const params = {
-    duration: dur, size: CFG.sizes.includes(size) ? size : '16:9', images, extra,
+    duration: dur,
+    size: CFG.sizes.includes(size) ? size : '16:9',
+    images,
+    extra,
+    model: chosenEngine.id,
+    videoProvider: chosenEngine.provider,
+    projectId: projectId || null,
     realism: realismEnabled(),
   };
   const cost = priceOf('video', params);
@@ -101,21 +161,22 @@ r.post('/videos', requireAuth, async (req, res) => {
     return res.status(402).json({ error: `积分不足，本次需要 ${cost}，当前 ${fresh.credits}` });
   }
 
-  const job = createJob(req.user.id, 'video', String(prompt).trim(), params, cost);
+  const job = createJob(req.user.id, 'video', cleanPrompt, params, cost, projectId);
   addCredits(req.user.id, -cost, '创建视频任务', job.id);
 
   try {
     const refs = normalizeRefs(images);
     const payload = {
-      prompt: applyRealism(prompt, 'video'),
-      model,
+      prompt: applyRealism(cleanPrompt, 'video'),
+      model: chosenEngine.id,
+      provider: chosenEngine.provider,
       duration: dur,
       size: params.size,
     };
     if (refs.length) payload.images = refs;
     if (extra) payload.extra = String(extra).slice(0, 500);
 
-    const out = await muse.createVideo(payload);
+    const out = await submitVideoTask(payload);
     const upstreamId = out?.id || out?.task_id;
     if (!upstreamId) throw new Error('上游未返回任务 ID');
     updateJob(job.id, { upstream_id: upstreamId, status: 'processing', progress: 15 });
@@ -131,14 +192,16 @@ r.post('/videos', requireAuth, async (req, res) => {
 /* ------------------------------ 图片 ------------------------------ */
 r.post('/images', requireAuth, async (req, res) => {
   const {
-    prompt, size = '1:1', images = [], provider = 'muse', model = null, resolution = '1K',
+    prompt, size = '1:1', images = [], provider = 'muse', model = null, resolution = '1K', projectId = null,
   } = req.body || {};
-  if (!prompt || String(prompt).trim().length < 2) {
+  const cleanPrompt = sanitizeVideoPrompt(prompt);
+  if (!cleanPrompt || cleanPrompt.length < 2) {
     return res.status(400).json({ error: '请填写提示词' });
   }
   const params = {
     size: CFG.sizes.includes(size) ? size : '1:1', images,
     provider: ['gemini', 'antigravity', 'chatgpt2api'].includes(provider) ? provider : 'muse', model, resolution,
+    projectId: projectId || null,
     realism: realismEnabled(),
   };
   const cost = priceOf('image', params);
@@ -148,7 +211,7 @@ r.post('/images', requireAuth, async (req, res) => {
     return res.status(402).json({ error: `积分不足，本次需要 ${cost}，当前 ${fresh.credits}` });
   }
 
-  const job = createJob(req.user.id, 'image', String(prompt).trim(), params, cost);
+  const job = createJob(req.user.id, 'image', cleanPrompt, params, cost, projectId);
   addCredits(req.user.id, -cost, '创建图片任务', job.id);
 
   try {
@@ -157,7 +220,7 @@ r.post('/images', requireAuth, async (req, res) => {
       const targets = { gemini, antigravity, chatgpt2api };
       const target = targets[params.provider];
       const out = await target.generateImage({
-        prompt: applyRealism(prompt, 'image'), model, size: params.size, resolution, images: refs, jobId: job.id,
+        prompt: applyRealism(cleanPrompt, 'image'), model, size: params.size, resolution, images: refs, jobId: job.id,
       });
       updateJob(job.id, {
         status: 'completed', progress: 100, media_file: out.fileName,
@@ -169,7 +232,7 @@ r.post('/images', requireAuth, async (req, res) => {
       });
       return res.json({ job: getJob(job.id) });
     }
-    const payload = { prompt: applyRealism(prompt, 'image'), model: 'muse-image', size: params.size };
+    const payload = { prompt: applyRealism(cleanPrompt, 'image'), model: 'muse-image', size: params.size };
     if (refs.length) payload.images = refs;
 
     const out = await muse.createImageTask(payload);
@@ -193,6 +256,8 @@ r.get('/jobs', requireAuth, (req, res) => {
     userId: req.user.role === 'admin' && req.query.all === '1' ? null : req.user.id,
     type: req.query.type || null,
     status: req.query.status || null,
+    projectId: req.query.projectId || null,
+    q: req.query.q || null,
     page,
     pageSize,
   });
@@ -208,6 +273,17 @@ r.get('/jobs/:id', requireAuth, (req, res) => {
   res.json({ job });
 });
 
+r.patch('/jobs/:id', requireAuth, (req, res) => {
+  const job = getJob(req.params.id);
+  if (!job) return res.status(404).json({ error: '任务不存在' });
+  if (job.userId !== req.user.id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: '无权修改' });
+  }
+  const projectId = req.body?.projectId === null ? null : String(req.body?.projectId || '').trim() || null;
+  updateJob(job.id, { project_id: projectId, params: { ...(job.params || {}), projectId } });
+  res.json({ job: getJob(job.id) });
+});
+
 r.delete('/jobs/:id', requireAuth, (req, res) => {
   const job = getJob(req.params.id);
   if (!job) return res.status(404).json({ error: '任务不存在' });
@@ -215,7 +291,10 @@ r.delete('/jobs/:id', requireAuth, (req, res) => {
     return res.status(403).json({ error: '无权删除' });
   }
   if (job.mediaFile) {
-    try { fs.unlinkSync(path.join(CFG.dataDir, 'media', job.mediaFile)); } catch { /* ignore */ }
+    const mediaPath = path.join(CFG.dataDir, 'media', job.mediaFile);
+    const posterPath = mediaPath.replace(/\.[^.]+$/, '.poster.webp');
+    try { fs.unlinkSync(mediaPath); } catch { /* ignore */ }
+    try { fs.unlinkSync(posterPath); } catch { /* ignore */ }
   }
   db.prepare('DELETE FROM jobs WHERE id = ?').run(job.id);
   res.json({ ok: true });
@@ -230,6 +309,7 @@ r.get('/meta', requireAuth, (_req, res) => {
     realismEnabled: s.realismEnabled === '1',
     durations: CFG.videoDurations,
     sizes: CFG.sizes,
+    videoEngines: listVideoEngines(),
     price: {
       videoBase: Number(s.priceVideoBase),
       videoPerSecond: Number(s.priceVideoPerSecond),

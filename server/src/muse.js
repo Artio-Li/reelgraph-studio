@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { CFG, MEDIA_DIR } from './config.js';
 
 class MuseError extends Error {
@@ -176,13 +178,24 @@ export async function downloadMedia(mediaPathOrUrl, jobId, kind = 'video', timeo
   }
   const res = await call(pathname, { raw: true, timeout });
   if (!res.ok) throw new MuseError(`媒体下载失败 HTTP ${res.status}`, res.status);
-  const buf = Buffer.from(await res.arrayBuffer());
+  fs.mkdirSync(MEDIA_DIR, { recursive: true });
   const fileName = `${jobId}${extOf(pathname, kind)}`;
   const dest = path.join(MEDIA_DIR, fileName);
   const tmp = `${dest}.part`;
-  fs.writeFileSync(tmp, buf);
-  fs.renameSync(tmp, dest);
-  return { fileName, bytes: buf.length };
+  try {
+    if (res.body) {
+      await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(tmp));
+    } else {
+      const buf = Buffer.from(await res.arrayBuffer());
+      fs.writeFileSync(tmp, buf);
+    }
+    const bytes = fs.statSync(tmp).size;
+    fs.renameSync(tmp, dest);
+    return { fileName, bytes };
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+    throw err;
+  }
 }
 
 export { MuseError };

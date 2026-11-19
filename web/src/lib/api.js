@@ -45,7 +45,8 @@ export const api = {
   production: (id) => request(`/api/productions/${encodeURIComponent(id)}`),
   createProductionBatch: (b) => request('/api/productions/batch', { method: 'POST', body: b }),
   productionBatches: () => request('/api/productions/batches'),
-  retryProduction: (id) => request(`/api/productions/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
+  retryProduction: (id, b = {}) => request(`/api/productions/${encodeURIComponent(id)}/retry`, { method: 'POST', body: b }),
+  cancelProduction: (id) => request(`/api/productions/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
   productionProviders: () => request('/api/productions/providers'),
   productionStyles: () => request('/api/productions/styles'),
   productionPresets: () => request('/api/productions/presets'),
@@ -77,14 +78,21 @@ export const api = {
   deleteCanvas: (id) => request(`/api/canvases/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   previewCanvasRun: (id, b) => request(`/api/canvases/${encodeURIComponent(id)}/runs/preview`, { method: 'POST', body: b }),
   runCanvas: (id, b) => request(`/api/canvases/${encodeURIComponent(id)}/runs`, { method: 'POST', body: b }),
+  retryFailedCanvasRun: (id) => request(`/api/canvases/${encodeURIComponent(id)}/runs/retry-failed`, { method: 'POST' }),
+  cancelCanvasRun: (runId) => request(`/api/canvases/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' }),
   canvasRuns: (id, limit = 10) => request(`/api/canvases/${encodeURIComponent(id)}/runs?limit=${limit}`),
   canvasRun: (runId) => request(`/api/canvases/runs/${encodeURIComponent(runId)}/status`),
-  exportStoryboard: (id, nodeId) => request(`/api/canvases/${encodeURIComponent(id)}/storyboards/${encodeURIComponent(nodeId)}/export`, { method: 'POST' }),
+  exportStoryboard: (id, nodeId, b = {}) => request(`/api/canvases/${encodeURIComponent(id)}/storyboards/${encodeURIComponent(nodeId)}/export`, { method: 'POST', body: b }),
+  projects: () => request('/api/projects'),
+  createProject: (b) => request('/api/projects', { method: 'POST', body: b }),
+  patchProject: (id, b) => request(`/api/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: b }),
+  deleteProject: (id) => request(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   jobs: (q = {}) => {
     const s = new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined && v !== null && v !== ''));
     return request(`/api/jobs?${s.toString()}`);
   },
   job: (id) => request(`/api/jobs/${id}`),
+  patchJob: (id, b) => request(`/api/jobs/${id}`, { method: 'PATCH', body: b }),
   deleteJob: (id) => request(`/api/jobs/${id}`, { method: 'DELETE' }),
 
   upload: (files) => {

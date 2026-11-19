@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow,
   addEdge, getOutgoers, useEdgesState, useNodesState,
@@ -7,7 +8,7 @@ import '@xyflow/react/dist/style.css';
 import {
   Box, Film, Image as ImageIcon, LayoutGrid, Loader2, Play, Plus, RefreshCw,
   Save, Sparkles, Trash2, Type, Upload, X, Bot, Wand2, Download, SkipBack, SkipForward,
-  ChevronUp, ChevronDown, Music,
+  ChevronUp, ChevronDown, Music, Undo2, Redo2, Square, Zap,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { api } from '../lib/api.js';
@@ -92,17 +93,25 @@ function Status({ runtime }) {
 }
 
 function Card({ children, tone = 'brand' }) {
-  const border = tone === 'violet' ? 'border-violet-500/40' : tone === 'sky' ? 'border-sky-400/40' : 'border-brand-500/35';
-  return <div className={clsx('w-[240px] max-w-[240px] overflow-hidden rounded-xl border bg-[#0d121b]/95 shadow-xl', border)}>{children}</div>;
+  const border = tone === 'violet'
+    ? 'border-violet-500/45 shadow-violet-950/30'
+    : tone === 'sky'
+      ? 'border-sky-400/45 shadow-sky-950/30'
+      : 'border-brand-500/40 shadow-emerald-950/30';
+  return (
+    <div className={clsx('w-[248px] max-w-[248px] overflow-hidden rounded-2xl border bg-ink-850/95 shadow-2xl backdrop-blur-md', border)}>
+      {children}
+    </div>
+  );
 }
 
 function Header({ icon: Icon, title, tag, runtime }) {
   return (
-    <div className="flex items-center gap-2 border-b border-white/5 px-3 py-2">
+    <div className="flex items-center gap-2 border-b border-ink-700/80 bg-ink-900/50 px-3 py-2">
       <Icon size={13} className="text-brand-300" />
-      <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-white">{title}</span>
+      <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold text-mist-100">{title}</span>
       <Status runtime={runtime} />
-      <span className="font-mono text-[8px] text-mist-400">{tag}</span>
+      <span className="font-mono text-[8.5px] text-mist-400">{tag}</span>
     </div>
   );
 }
@@ -365,6 +374,14 @@ function Inspector({
               </select>
             </label>
           </div>
+          <label className="block text-[11px] text-mist-300">
+            烧录字幕文案（可选）
+            <input value={data.subtitle || ''} onChange={(e) => patch({ subtitle: e.target.value })} placeholder="分镜板导出时自动烧录到底部" className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-3 py-2 text-[12px] outline-none focus:border-brand-500" />
+          </label>
+          <label className="flex items-center justify-between gap-2 rounded-lg border border-ink-600 bg-ink-900/60 px-3 py-2 text-[11px] text-mist-200">
+            <span>首帧关键帧优先（接入 AI 图作为第0帧）</span>
+            <input type="checkbox" checked={!!data.keyframePriority} onChange={(e) => patch({ keyframePriority: e.target.checked })} className="accent-brand-400" />
+          </label>
           <div className="rounded-lg border border-ink-600 bg-ink-900/60 p-3">
             <label className="flex items-center justify-between gap-3 text-[11px] text-mist-200">
               <span>生成后自动质检</span>
@@ -428,9 +445,14 @@ function Inspector({
                   <label className="text-[9px] text-mist-400">转场<select value={clip.transition || 'cut'} onChange={(e) => onUpdateClip(clip.edgeId, { transition: e.target.value })} className="mt-1 w-full rounded border border-ink-600 bg-ink-950 px-2 py-1"><option value="cut">硬切</option><option value="fade">淡化</option></select></label>
                 </div>
                 {clip.transition === 'fade' && <label className="mt-2 block text-[9px] text-mist-400">转场时长(秒)<input type="number" min="0.1" max="1.5" step="0.05" value={clip.transitionDuration || 0.35} onChange={(e) => onUpdateClip(clip.edgeId, { transitionDuration: Number(e.target.value) })} className="mt-1 w-full rounded border border-ink-600 bg-ink-950 px-2 py-1" /></label>}
+                <label className="mt-2 block text-[9px] text-mist-400">片段字幕<input value={clip.subtitle || ''} onChange={(e) => onUpdateClip(clip.edgeId, { subtitle: e.target.value })} placeholder="可选：本段底部字幕" className="mt-1 w-full rounded border border-ink-600 bg-ink-950 px-2 py-1 text-[11px]" /></label>
               </div>
             ))}
           </div>
+          <label className="flex items-center justify-between gap-2 rounded-lg border border-ink-600 bg-ink-900/60 px-3 py-2 text-[11px] text-mist-200">
+            <span>导出时烧录片段字幕</span>
+            <input type="checkbox" checked={data.burnSubtitles !== false} onChange={(e) => patch({ burnSubtitles: e.target.checked })} className="accent-brand-400" />
+          </label>
           <label className="block text-[11px] text-mist-300">导出画幅
             <select value={data.outputSize || 'source'} onChange={(e) => patch({ outputSize: e.target.value })} className="mt-1.5 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-2 text-[12px]"><option value="source">跟随首个片段</option><option value="16:9">16:9 横屏</option><option value="9:16">9:16 竖屏</option><option value="1:1">1:1 方形</option></select>
           </label>
@@ -463,6 +485,7 @@ function Inspector({
 export default function Canvas() {
   const { refresh } = useAuth();
   const toast = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [canvases, setCanvases] = useState([]);
@@ -479,12 +502,67 @@ export default function Canvas() {
   const [aiBusy, setAiBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [geminiMeta, setGeminiMeta] = useState(null);
+  const [undoCount, setUndoCount] = useState(0);
+  const [redoCount, setRedoCount] = useState(0);
   const flowRef = useRef(null);
   const revRef = useRef(1);
   const lastSavedRef = useRef('');
   const saveTimerRef = useRef(null);
   const saveChainRef = useRef(Promise.resolve());
+  const undoStackRef = useRef([]);
+  const redoStackRef = useRef([]);
   const latestRef = useRef({ nodes: [], edges: [], name: '默认画布', viewport: { x: 0, y: 0, zoom: 1 } });
+
+  const recordUndoSnapshot = useCallback(() => {
+    const snap = {
+      nodes: latestRef.current.nodes.map(cleanNode),
+      edges: latestRef.current.edges.map((e) => ({ ...e })),
+    };
+    undoStackRef.current = [...undoStackRef.current.slice(-29), snap];
+    redoStackRef.current = [];
+    setUndoCount(undoStackRef.current.length);
+    setRedoCount(0);
+  }, []);
+
+  const handleUndo = useCallback(() => {
+    if (!undoStackRef.current.length) return;
+    const prev = undoStackRef.current.pop();
+    redoStackRef.current.push({
+      nodes: latestRef.current.nodes.map(cleanNode),
+      edges: latestRef.current.edges.map((e) => ({ ...e })),
+    });
+    setNodes(prev.nodes);
+    setEdges(prev.edges);
+    setUndoCount(undoStackRef.current.length);
+    setRedoCount(redoStackRef.current.length);
+  }, [setEdges, setNodes]);
+
+  const handleRedo = useCallback(() => {
+    if (!redoStackRef.current.length) return;
+    const next = redoStackRef.current.pop();
+    undoStackRef.current.push({
+      nodes: latestRef.current.nodes.map(cleanNode),
+      edges: latestRef.current.edges.map((e) => ({ ...e })),
+    });
+    setNodes(next.nodes);
+    setEdges(next.edges);
+    setUndoCount(undoStackRef.current.length);
+    setRedoCount(redoStackRef.current.length);
+  }, [setEdges, setNodes]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) handleRedo();
+        else handleUndo();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [handleRedo, handleUndo]);
 
   const runtime = useMemo(() => new Map([
     ...nodeHistory.map((item) => [item.nodeId, item]),
@@ -509,6 +587,7 @@ export default function Canvas() {
           volume: Number.isFinite(Number(edge.data?.volume)) ? Number(edge.data.volume) : 1,
           transition: edge.data?.transition === 'fade' ? 'fade' : 'cut',
           transitionDuration: Number(edge.data?.transitionDuration) || 0.35,
+          subtitle: edge.data?.subtitle || source?.data?.subtitle || '',
         };
       });
       result.set(board.id, clips);
@@ -585,6 +664,10 @@ export default function Canvas() {
     setNodeHistory(history);
     setViewport(doc.viewport || { x: 0, y: 0, zoom: 1 });
     setSelectedIds([]);
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+    setUndoCount(0);
+    setRedoCount(0);
     revRef.current = record.rev;
     latestRef.current = { nodes: doc.nodes || [], edges: hydratedEdges, name: record.name, viewport: doc.viewport };
     lastSavedRef.current = JSON.stringify({ name: record.name, doc: { ...doc, edges: hydratedEdges } });
@@ -619,7 +702,13 @@ export default function Canvas() {
         }
         if (cancelled) return;
         setCanvases(list);
-        await openCanvas(list[0].id);
+        const queryCanvasId = searchParams.get('canvas');
+        const targetId = list.some((c) => c.id === queryCanvasId) ? queryCanvasId : list[0].id;
+        if (queryCanvasId) {
+          searchParams.delete('canvas');
+          setSearchParams(searchParams, { replace: true });
+        }
+        await openCanvas(targetId);
       } catch (error) {
         if (!cancelled) toast(error.message, 'error');
       } finally {
@@ -711,6 +800,7 @@ export default function Canvas() {
 
   const onConnect = useCallback((connection) => {
     if (!isValidConnection(connection)) return toast('这两个端口不能连接，或连线会形成循环', 'error');
+    recordUndoSnapshot();
     setEdges((current) => {
       const order = connection.targetHandle === 'clip'
         ? current
@@ -738,6 +828,7 @@ export default function Canvas() {
       storyboard: { label: '分镜板', outputSize: 'source', bgmUrl: '', bgmVolume: 0.25 },
     };
     const node = { id: newId(), type, position: { x: point.x - 115, y: point.y - 70 }, data: defaults[type] };
+    recordUndoSnapshot();
     setNodes((current) => [...current, node]);
     setSelectedIds([node.id]);
   };
@@ -760,6 +851,7 @@ export default function Canvas() {
       : edge);
   });
   const removeNode = (id) => {
+    recordUndoSnapshot();
     setNodes((items) => items.filter((node) => node.id !== id));
     setEdges((items) => items.filter((edge) => edge.source !== id && edge.target !== id));
     setSelectedIds((ids) => ids.filter((item) => item !== id));
@@ -885,6 +977,35 @@ export default function Canvas() {
     }
   };
 
+  const cancelRun = async () => {
+    if (!latestRun?.id || !ACTIVE.has(latestRun.status)) return;
+    if (!window.confirm('确认取消当前正在运行的画布任务？未完成节点的积分会自动退还。')) return;
+    try {
+      const out = await api.cancelCanvasRun(latestRun.id);
+      setLatestRun(out.run);
+      refresh();
+      toast('工作流已取消，未消耗积分已退回', 'info');
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  };
+
+  const retryFailedNodes = async () => {
+    if (!canvas?.id || runBusy || ACTIVE.has(latestRun?.status)) return;
+    setRunBusy(true);
+    try {
+      await persist();
+      const out = await api.retryFailedCanvasRun(canvas.id);
+      setLatestRun(out.run);
+      refresh();
+      toast('已提交失败节点重跑，已完成节点直接复用缓存', 'ok');
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      setRunBusy(false);
+    }
+  };
+
   const exportStoryboard = async (node) => {
     if (!canvas?.id || exportBusy) return;
     setExportBusy(true);
@@ -937,42 +1058,70 @@ export default function Canvas() {
     } catch (error) { toast(error.message, 'error'); }
   };
 
+  const hasFailedNodes = useMemo(
+    () => (latestRun?.nodeRuns || []).some((nr) => nr.status === 'failed'),
+    [latestRun],
+  );
+
   if (loading && !canvas) return <div className="grid h-full place-items-center text-brand-400"><Loader2 className="animate-spin" /></div>;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-ink-700 px-5 py-3">
+      <div className="flex shrink-0 flex-wrap items-center gap-2.5 border-b border-ink-700/80 glass px-5 py-2.5">
         <div className="mr-2">
-          <p className="eyebrow">Canvas · Workbench</p>
-          <h1 className="mt-1 text-xl font-semibold text-white">无限画布</h1>
+          <p className="eyebrow">Canvas · DAG Workbench</p>
+          <h1 className="mt-0.5 text-[17px] font-semibold text-mist-100">无限画布</h1>
         </div>
-        <select value={canvas?.id || ''} onChange={(e) => switchCanvas(e.target.value)} className="min-w-40 rounded-lg border border-ink-600 bg-ink-900 px-3 py-2 text-[12px] text-mist-200">
+        <select value={canvas?.id || ''} onChange={(e) => switchCanvas(e.target.value)} className="min-w-38 rounded-xl border border-ink-600 bg-ink-900 px-3 py-1.5 text-[12px] text-mist-200 outline-none focus:border-brand-500">
           {canvases.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select>
-        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} className="w-44 rounded-lg border border-ink-600 bg-ink-900 px-3 py-2 text-[12px] text-mist-200 outline-none focus:border-brand-500" />
-        <button onClick={createCanvas} className="flex items-center gap-1.5 rounded-lg border border-ink-600 px-3 py-2 text-[11px] text-mist-300 hover:text-white"><Plus size={12} /> 新画布</button>
-        <button onClick={deleteCurrent} className="grid h-8 w-8 place-items-center rounded-lg border border-rose-500/25 text-rose-300 hover:bg-rose-500/10"><Trash2 size={13} /></button>
-        <span className="flex items-center gap-1 text-[10px] text-mist-400">{saving ? <Loader2 size={11} className="animate-spin" /> : <Save size={11} />}{saving ? '保存中' : '已自动保存'}</span>
-        {geminiMeta?.realismEnabled && (
-          <span className="rounded-full border border-brand-500/25 bg-brand-500/10 px-2 py-1 text-[10px] text-brand-300">真实拍摄模式</span>
-        )}
-        <div className="ml-auto flex items-center gap-2">
-          <button onClick={() => run([], true)} disabled={runBusy || ACTIVE.has(latestRun?.status)} title="忽略历史缓存，重新生成新的变体" className="flex items-center gap-1.5 rounded-lg border border-ink-600 px-3 py-2 text-[11px] text-mist-300 hover:text-white disabled:opacity-40"><RefreshCw size={12} /> 强制新变体</button>
-          <button onClick={() => run([], false)} disabled={runBusy || ACTIVE.has(latestRun?.status)} className="flex items-center gap-1.5 rounded-lg brand-gradient px-4 py-2 text-[12px] font-medium text-white disabled:opacity-45">
+        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} className="w-40 rounded-xl border border-ink-600 bg-ink-900 px-3 py-1.5 text-[12px] text-mist-200 outline-none focus:border-brand-500" />
+        <button onClick={createCanvas} className="flex items-center gap-1 rounded-xl border border-ink-600 bg-ink-850 px-2.5 py-1.5 text-[11.5px] text-mist-200 transition hover:border-brand-500/50 hover:text-mist-100"><Plus size={12} /> 新画布</button>
+        <button onClick={deleteCurrent} title="删除当前画布" className="grid h-8 w-8 place-items-center rounded-xl border border-rose-500/25 text-rose-300 transition hover:bg-rose-500/12"><Trash2 size={13} /></button>
+
+        {/* 撤销 / 重做 */}
+        <div className="flex items-center gap-0.5 rounded-xl border border-ink-700 bg-ink-900/70 p-0.5">
+          <button onClick={handleUndo} disabled={!undoCount} title="撤销 (⌘Z)" className="rounded-lg p-1.5 text-mist-300 transition hover:bg-ink-750 disabled:opacity-30"><Undo2 size={13} /></button>
+          <button onClick={handleRedo} disabled={!redoCount} title="重做 (⌘⇧Z)" className="rounded-lg p-1.5 text-mist-300 transition hover:bg-ink-750 disabled:opacity-30"><Redo2 size={13} /></button>
+        </div>
+
+        <span className="flex items-center gap-1 text-[10.5px] text-mist-400">{saving ? <Loader2 size={11} className="animate-spin text-brand-400" /> : <Save size={11} />}{saving ? '同步中' : '已自动保存'}</span>
+
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {ACTIVE.has(latestRun?.status) && (
+            <button onClick={cancelRun} className="flex items-center gap-1.5 rounded-xl border border-rose-500/35 bg-rose-500/12 px-3 py-1.5 text-[11.5px] font-medium text-rose-300 transition hover:bg-rose-500/22">
+              <Square size={11} /> 取消运行
+            </button>
+          )}
+          {!ACTIVE.has(latestRun?.status) && hasFailedNodes && (
+            <button onClick={retryFailedNodes} disabled={runBusy} className="flex items-center gap-1.5 rounded-xl border border-amber-500/35 bg-amber-500/12 px-3 py-1.5 text-[11.5px] font-medium text-amber-300 transition hover:bg-amber-500/22">
+              <Zap size={12} /> 仅重跑失败节点
+            </button>
+          )}
+          <button onClick={() => run([], true)} disabled={runBusy || ACTIVE.has(latestRun?.status)} title="忽略历史缓存，重新生成新的变体" className="flex items-center gap-1.5 rounded-xl border border-ink-600 bg-ink-850 px-3 py-1.5 text-[11.5px] text-mist-300 transition hover:border-brand-500/40 hover:text-mist-100 disabled:opacity-40"><RefreshCw size={12} /> 强制新变体</button>
+          <button onClick={() => run([], false)} disabled={runBusy || ACTIVE.has(latestRun?.status)} className="flex items-center gap-1.5 rounded-xl brand-gradient px-4 py-1.5 text-[12.5px] font-medium text-white disabled:opacity-45">
             {runBusy || ACTIVE.has(latestRun?.status) ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-            {ACTIVE.has(latestRun?.status) ? '运行中' : '运行全部工作流'}
+            {ACTIVE.has(latestRun?.status) ? '工作流执行中…' : '运行整张工作流'}
           </button>
         </div>
       </div>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="z-10 flex w-14 shrink-0 flex-col items-center gap-2 border-r border-ink-700 bg-ink-850 py-3">
+        <aside className="z-10 flex w-[68px] shrink-0 flex-col items-center gap-1.5 border-r border-ink-700/80 bg-ink-850/90 py-3">
           {[
-            ['text', Type, '文本'], ['image', ImageIcon, '图片'], ['geminiPrompt', Wand2, 'AI提示词'],
-            ['geminiImage', Bot, 'AI人物图'], ['character', Box, '身份'],
-            ['video', Film, '视频'], ['storyboard', LayoutGrid, '分镜板'],
+            ['text', Type, '文本'], ['image', ImageIcon, '参考图'], ['geminiPrompt', Wand2, 'AI写词'],
+            ['geminiImage', Bot, 'AI首帧'], ['character', Box, '身份锚'],
+            ['video', Film, '生视频'], ['storyboard', LayoutGrid, '分镜板'],
           ].map(([type, Icon, label]) => (
-            <button key={type} onClick={() => addNodeOf(type)} title={`添加${label}节点`} className="grid h-9 w-9 place-items-center rounded-lg border border-ink-600 text-mist-400 hover:border-brand-500/60 hover:bg-brand-500/10 hover:text-brand-300"><Icon size={15} /></button>
+            <button
+              key={type}
+              onClick={() => addNodeOf(type)}
+              title={`添加${label}节点`}
+              className="group flex w-13 flex-col items-center gap-1 rounded-xl border border-transparent py-2 text-mist-400 transition hover:border-brand-500/40 hover:bg-brand-500/10 hover:text-brand-300"
+            >
+              <Icon size={15} />
+              <span className="text-[9.5px] font-medium">{label}</span>
+            </button>
           ))}
         </aside>
 

@@ -9,28 +9,31 @@ import { api, fmtAgo, fmtTime } from '../lib/api.js';
 import { Badge, Button, Field, Input, Select, useToast, Spinner, Empty } from '../components/ui.jsx';
 
 const TABS = [
-  ['overview', '概览', Cpu],
-  ['users', '用户', Users],
-  ['orders', '订单', Wallet],
-  ['posts', '社区', MessageSquare],
-  ['settings', '设置', Settings2],
+  ['overview', '运行监控', Cpu],
+  ['users', '用户与积分', Users],
+  ['settings', '模型路由与设置', Settings2],
 ];
 
 export default function Admin() {
   const [tab, setTab] = useState('overview');
   return (
-    <div className="p-5 lg:p-7">
-      <div className="mb-5 flex gap-1.5 rounded-xl bg-ink-850 p-1 w-fit">
+    <div className="mx-auto max-w-6xl p-5 lg:p-7">
+      <header className="mb-5">
+        <p className="eyebrow">System · Administration</p>
+        <h1 className="mt-1 text-2xl font-semibold text-mist-100">系统管理中心</h1>
+        <p className="mt-1 text-[12.5px] text-mist-400">管理多路 AI Provider 路由、真实拍摄模式、用户额度与上游引擎运行状态。</p>
+      </header>
+      <div className="mb-5 flex w-fit gap-1 rounded-2xl border border-ink-700 bg-ink-850/90 p-1">
         {TABS.map(([k, label, Icon]) => (
           <button
             key={k}
             onClick={() => setTab(k)}
             className={clsx(
-              'flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[13px] font-medium transition',
-              tab === k ? 'bg-ink-700 text-white shadow-sm' : 'text-mist-400 hover:text-mist-200'
+              'flex items-center gap-1.5 rounded-xl px-4 py-2 text-[13px] font-medium transition',
+              tab === k ? 'bg-ink-750 text-mist-100 shadow-sm' : 'text-mist-400 hover:text-mist-200'
             )}
           >
-            <Icon size={13} /> {label}
+            <Icon size={14} className={tab === k ? 'text-brand-400' : ''} /> {label}
           </button>
         ))}
       </div>

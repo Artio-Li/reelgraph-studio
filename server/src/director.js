@@ -1,22 +1,28 @@
 /**
- * 自动导演（Auto Director）v2
+ * 自动导演（Auto Director）v3
  *
- * Brief → Planner（LLM / 规则兜底）→ Validator → 自动建画布 → 现有画布执行器
- * → 质检（失败时按反馈修复提示词后重试）→ 分镜板导出成片。
- *
- * v2 新增：
- * - 批量模式：一个 batch 内多条 brief 串行排队，避免同时打满上游并发；
- * - 排队状态 queued，由调度器按 directorConcurrency 逐个启动。
+ * Brief → Planner（LLM JSON Mode / 规则兜底 / 用户确认并编辑后的分镜）
+ * → Validator → 自动建画布（支持首帧关键帧并行管线 Keyframe-First / 续集链 / 标准并行）
+ * → 画布执行器 → 风格感知质检与反馈改词重试 → 配音合成(TTS) + 字幕烧录 + 分镜板导出成片。
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { CFG } from './config.js';
-import { db, uid, now, priceOf, getSetting } from './db.js';
+import { db, uid, now, getSetting } from './db.js';
 import { canvasProvider } from './canvasAI.js';
-import { getStylePreset, styleBaseline } from './styles.js';
+import { getStylePreset, styleBaseline, composeStylePrompt } from './styles.js';
 import {
   getStoryStructure, getShotRecipe, getCharacterCard,
   storyBaseline, shotBaseline, characterBaseline,
 } from './presets.js';
-import { signToken } from './auth.js';
+import {
+  startCanvasRunForUser,
+  exportStoryboardForUser,
+  cancelCanvasRunForUser,
+  retryFailedCanvasNodesForUser,
+} from './routes/canvases.js';
+import { synthesizeNarrationToFile, VOICE_PRESETS } from './tts.js';
+import { sanitizeVideoPrompt } from './videoProvider.js';
 
 const ACTIVE = new Set(['planning', 'running', 'assembling']);
 const MAX_SHOTS = 8;
@@ -43,7 +49,7 @@ function fail(message, status = 400) {
 
 const PLANNER_SYSTEM = `你是 ReelGraph Studio 的 AI 视频导演。根据用户的创作方向与关键词，规划一支可直接生产的短片。
 
-只输出一个 JSON 对象，不要 Markdown 代码块，不要解释。
+只输出一个合法 JSON 对象，不要 Markdown 代码块，不要任何额外解释文字。
 
 JSON 结构：
 {
@@ -52,22 +58,24 @@ JSON 结构：
   "shots": [
     {
       "index": 1,
-      "label": "镜头 1",
+      "label": "镜头 1 · 节拍名",
       "duration": 10,
       "continuation": false,
-      "prompt": "可直接用于视频模型的完整中文提示词：人物、服装、场景、光线来源、机位、景别、逐段动作节奏"
+      "keyframePrompt": "本镜头第 0 秒定格首帧画面描述：人物姿态、场景空间、机位景别、光线色调（纯静态画面，不含时间推移）",
+      "narration": "本镜头配套的自然中文旁白或口播台词（10-28字，贴合画面情绪与时长；纯空镜可留空字符串）",
+      "prompt": "可直接用于视频模型的完整中文提示词：人物、场景、光线来源、机位、景别、逐段动作节奏"
     }
   ]
 }
 
 硬性规则：
 1. duration 只能是 5、6、8、10 之一；所有镜头时长之和应等于用户要求的成片时长（允许 ±10%）。
-2. 每个 prompt 只描述本镜头，不要把多个镜头写进同一段。
-3. prompt 里不要出现与本镜头 duration 冲突的时长描述（例如 duration=10 却写“严格 5 秒”）。
-4. 人物外观在每段 prompt 里都要重复写清楚（发色、服装、配饰），不要依赖模型记忆。
-5. 第一个镜头 continuation 必须为 false；后续镜头需要与上一镜头连续时才为 true。
-6. 一段 10 秒内最多 2–3 个主要动作，不要塞入无法完成的动作。
-7. 只写画面，不写镜头切换、转场、字幕或后期。`;
+2. 每个 prompt 只描述本镜头，不要把多个镜头写进同一段，严禁出现 @[Image 1] 或 @图1 符号。
+3. prompt 里绝对不要出现任何具体秒数数字（例如不要写“5秒”“10.00秒”“0-3秒”），节奏用“起初、随后、最后”表达，避免与节点时长冲突。
+4. 若用户未上传参考图，人物外观在每段 prompt 与 keyframePrompt 里都要重复写清楚；若提示说明“已上传人物参考图”，则写“保持参考图中的人物面容、发型与穿搭造型”，不要自行编造可能冲突的新衣服颜色款式。
+5. 第一个镜头 continuation 必须为 false；仅在用户要求续集连续且相邻镜头同一时空接续时才设为 true。
+6. 一段镜头内最多安排 2–3 个自然连贯动作，不塞入无法完成的复杂表演。
+7. prompt 只写实拍画面与动作，不写转场、字幕、花字或后期包装。`;
 
 function shotCountFor(brief) {
   const total = Number(brief.totalSeconds) || 30;
@@ -75,9 +83,16 @@ function shotCountFor(brief) {
   return Math.min(MAX_SHOTS, Math.max(1, Math.round(total / per)));
 }
 
+function effectivePipelineMode(brief) {
+  if (['keyframe', 'chain', 'standard'].includes(brief.pipelineMode)) return brief.pipelineMode;
+  return brief.chain ? 'chain' : 'standard';
+}
+
 function plannerUserPrompt(brief) {
   const count = shotCountFor(brief);
   const per = Number(brief.shotSeconds) || 10;
+  const mode = effectivePipelineMode(brief);
+  const hasRefPhotos = Array.isArray(brief.characterRefs) && brief.characterRefs.length > 0;
   const preset = getStylePreset(brief.styleId);
   const styleLine = preset
     ? styleBaseline(preset)
@@ -88,7 +103,12 @@ function plannerUserPrompt(brief) {
   const card = getCharacterCard(brief.characterId);
   const storyLine = story ? storyBaseline(story, count) : '';
   const shotLine = recipe ? shotBaseline(recipe) : '';
-  const characterLine = card ? characterBaseline(card) : '';
+  const characterLine = hasRefPhotos
+    ? `已上传 ${brief.characterRefs.length} 张真实人物参考图作为最高优先级身份锚点：各镜头人物面容、发型与服装必须保持参考图一致，请勿编造冲突服装描述${brief.characterDescription ? `（补充特征：${String(brief.characterDescription).slice(0, 200)}）` : ''}。`
+    : (characterBaseline(card) || (brief.characterDescription
+      ? `人物设定（每个镜头都要原样复述）：${String(brief.characterDescription).slice(0, 300)}`
+      : ''));
+
   return [
     `创作方向：${String(brief.direction || '').slice(0, 500)}`,
     brief.keywords ? `关键词：${String(brief.keywords).slice(0, 500)}` : '',
@@ -96,14 +116,16 @@ function plannerUserPrompt(brief) {
     `每镜时长：${per} 秒`,
     `镜头数量：${count} 个`,
     `画幅：${brief.size || '9:16'}`,
+    `管线模式：${mode === 'keyframe' ? '首帧关键帧并行模式（请认真填写每个镜头的 keyframePrompt 静态首帧描述，continuation 全部设为 false）' : mode === 'chain' ? '连续续集链模式（相邻连续镜头可将 continuation 设为 true）' : '独立镜头并行模式（continuation 设为 false）'}`,
+    brief.voiceoverEnabled || brief.subtitlesEnabled
+      ? '旁白与字幕已开启：请为每个镜头撰写自然、有感染力、与镜头时长匹配的中文旁白 narration（12-26字）。'
+      : '请同时为每个镜头附带一句简短可选旁白 narration，方便用户按需开启字幕或配音。',
     styleLine,
     styleAvoid,
     storyLine,
     shotLine,
-    characterLine || (brief.characterDescription
-      ? `人物设定（每个镜头都要原样复述）：${String(brief.characterDescription).slice(0, 300)}`
-      : ''),
-    `请输出 ${count} 个镜头的 JSON。`,
+    characterLine,
+    `请严格输出包含 ${count} 个镜头的 JSON 对象。`,
   ].filter(Boolean).join('\n');
 }
 
@@ -136,7 +158,8 @@ async function planWithLLM(brief) {
             { role: 'system', content: PLANNER_SYSTEM },
             { role: 'user', content: plannerUserPrompt(brief) },
           ],
-          temperature: 0.7,
+          temperature: 0.68,
+          jsonMode: true,
         });
         const plan = extractJson(out?.content);
         if (!Array.isArray(plan?.shots) || !plan.shots.length) {
@@ -158,20 +181,31 @@ function planFallback(brief) {
   const per = Number(brief.shotSeconds) || 10;
   const direction = String(brief.direction || '短片').slice(0, 120);
   const keywords = String(brief.keywords || '').split(/[,，、\s]+/).filter(Boolean).slice(0, 6);
-  const beats = ['建立环境与人物出场', '核心动作展开', '情绪或细节特写', '收束与留白'];
-  const shots = Array.from({ length: count }, (_, i) => ({
-    index: i + 1,
-    label: `镜头 ${i + 1}`,
-    duration: per,
-    continuation: false,
-    prompt: [
+  const hasRefPhotos = Array.isArray(brief.characterRefs) && brief.characterRefs.length > 0;
+  const preset = getStylePreset(brief.styleId);
+  const styleDesc = preset ? composeStylePrompt(preset) : (brief.style || '真实拍摄质感，自然光来源明确');
+  const beats = ['建立环境与人物出场', '核心动作自然展开', '情绪与细节近景特写', '氛围收束与画面留白'];
+  const shots = Array.from({ length: count }, (_, i) => {
+    const charLine = hasRefPhotos
+      ? '保持参考图中的人物面容、发型与穿搭一致。'
+      : (brief.characterDescription ? `人物：${brief.characterDescription}。` : '');
+    const prompt = [
       `主题：${direction}。`,
-      keywords.length ? `画面关键词：${keywords.join('、')}。` : '',
-      `本镜头内容：${beats[i % beats.length]}。`,
-      brief.characterDescription ? `人物：${brief.characterDescription}。` : '',
-      '真实拍摄质感，自然光来源明确，真实手机或相机物理表现，中景为主，画面稳定无跳切。',
-    ].filter(Boolean).join(''),
-  }));
+      keywords.length ? `画面元素：${keywords.join('、')}。` : '',
+      `本镜头重点：${beats[i % beats.length]}。`,
+      charLine,
+      `${styleDesc}，画面稳定连贯无跳切。`,
+    ].filter(Boolean).join('');
+    return {
+      index: i + 1,
+      label: `镜头 ${i + 1}`,
+      duration: per,
+      continuation: false,
+      keyframePrompt: prompt,
+      narration: i === 0 ? direction.slice(0, 24) : '',
+      prompt,
+    };
+  });
   return { title: direction.slice(0, 20), character: null, shots, provider: 'fallback' };
 }
 
@@ -181,32 +215,38 @@ function countGroup(shots, group) {
   return shots.filter((shot) => shot.chainGroup === group).length;
 }
 
-function validatePlan(plan, brief) {
+export function validatePlan(plan, brief = {}) {
+  if (!plan || typeof plan !== 'object') throw fail('分镜结构无效');
   const shots = Array.isArray(plan.shots) ? plan.shots : [];
   if (!shots.length) throw fail('分镜为空，无法开始生产');
   if (shots.length > MAX_SHOTS) throw fail(`镜头数量超过上限 ${MAX_SHOTS}`);
+  const mode = effectivePipelineMode(brief);
 
   const normalized = shots.map((shot, index) => {
     const duration = Number(shot.duration);
     if (!CFG.videoDurations.includes(duration)) {
       throw fail(`镜头 ${index + 1} 的时长 ${shot.duration} 不合法，只能是 ${CFG.videoDurations.join('/')} 秒`);
     }
-    const prompt = String(shot.prompt || '').trim();
+    // 自动清理提示词中与节点时长冲突的秒数表述，避免直接报错打断用户流程
+    let prompt = sanitizeVideoPrompt(String(shot.prompt || '').trim());
+    prompt = prompt.replace(/严格\s*\d+(?:\.\d+)?\s*秒[｜|，,。;\s]*/g, '');
+    prompt = prompt.replace(/(\d+(?:\.\d+)?)\s*秒/g, (match, num) => (Number(num) === duration ? match : '本段'));
+
     if (prompt.length < 8) throw fail(`镜头 ${index + 1} 的提示词太短`);
-    if (prompt.length > 1200) throw fail(`镜头 ${index + 1} 的提示词过长（上限 1200 字）`);
-    const seconds = [...prompt.matchAll(/(\d+(?:\.\d+)?)\s*秒/g)]
-      .map((match, i) => Number(match[1]))
-      .filter((value) => value >= 5);
-    const conflicting = [...new Set(seconds)].filter((value) => value !== duration);
-    if (conflicting.length) {
-      throw fail(`镜头 ${index + 1} 的提示词写了 ${conflicting.join('/')} 秒，与节点时长 ${duration} 秒冲突，容易被上游拒绝`);
-    }
+    if (prompt.length > 1400) prompt = prompt.slice(0, 1400);
+
+    const keyframePrompt = sanitizeVideoPrompt(String(shot.keyframePrompt || prompt).trim()).slice(0, 1000);
+    const narration = String(shot.narration || '').replace(/\r?\n+/g, ' ').trim().slice(0, 120);
+    const allowChain = mode === 'chain';
+
     return {
       index: index + 1,
       label: String(shot.label || `镜头 ${index + 1}`).slice(0, 40),
       duration,
       prompt,
-      continuation: index > 0 && shot.continuation === true,
+      keyframePrompt,
+      narration,
+      continuation: allowChain && index > 0 && shot.continuation !== false,
       chainGroup: 0,
     };
   });
@@ -214,15 +254,14 @@ function validatePlan(plan, brief) {
   let group = 0;
   normalized.forEach((shot, i) => {
     if (i === 0 || !shot.continuation) group += 1;
-    else if (normalized[i - 1].chainGroup === group && countGroup(normalized, group) >= MAX_CHAIN) group += 1;
+    else if (normalized[i - 1].chainGroup === group && countGroup(normalized, group) >= MAX_CHAIN) {
+      shot.continuation = false;
+      group += 1;
+    }
     shot.chainGroup = group;
   });
 
   const total = normalized.reduce((sum, shot) => sum + shot.duration, 0);
-  const wanted = Number(brief.totalSeconds) || total;
-  if (Math.abs(total - wanted) > Math.max(6, wanted * 0.25)) {
-    throw fail(`分镜总时长 ${total} 秒与要求的 ${wanted} 秒差距过大`);
-  }
 
   return {
     title: String(plan.title || brief.direction || '自动短片').slice(0, 40),
@@ -232,29 +271,42 @@ function validatePlan(plan, brief) {
         description: String(plan.character.description || '').slice(0, 300),
       }
       : null,
-    provider: String(plan.provider || 'unknown'),
-    styleId: String(brief.styleId || ''),
-    storyId: String(brief.storyId || ''),
-    shotId: String(brief.shotId || ''),
-    characterId: String(brief.characterId || ''),
-    shots: normalized,
+    provider: String(plan.provider || brief.provider || 'custom'),
+    pipelineMode: mode,
+    styleId: String(brief.styleId || plan.styleId || ''),
+    storyId: String(brief.storyId || plan.storyId || ''),
+    shotId: String(brief.shotId || plan.shotId || ''),
+    characterId: String(brief.characterId || plan.characterId || ''),
     totalSeconds: total,
-    estimatedCost: normalized.reduce(
-      (sum, shot) => sum + priceOf('video', { duration: shot.duration, size: brief.size }),
-      0,
-    ),
+    shots: normalized,
   };
 }
 
-/* --------------------------- Canvas builder --------------------------- */
+function resolveImageProviderForKeyframes(preferredProvider) {
+  const order = [preferredProvider, 'chatgpt2api', 'antigravity', 'gemini'].filter(Boolean);
+  for (const id of [...new Set(order)]) {
+    try {
+      canvasProvider(id);
+      return id;
+    } catch { /* try next */ }
+  }
+  return null;
+}
 
 function buildCanvasDoc(plan, brief) {
   const nodes = [];
   const edges = [];
   const size = CFG.sizes.includes(brief.size) ? brief.size : '9:16';
   const anchorRefs = Array.isArray(brief.characterRefs) ? brief.characterRefs.slice(0, 4) : [];
+  const mode = effectivePipelineMode(brief);
+  const preset = getStylePreset(brief.styleId);
+  const styleSuffix = preset ? `视觉风格要求：${composeStylePrompt(preset)}。` : (brief.style ? `风格：${brief.style}。` : '');
+  const kfProvider = mode === 'keyframe' ? resolveImageProviderForKeyframes(brief.provider) : null;
+  const useKeyframes = mode === 'keyframe' && Boolean(kfProvider);
 
   let characterId = null;
+  const refImageNodeIds = [];
+
   if (anchorRefs.length) {
     characterId = uid('n_');
     nodes.push({
@@ -267,17 +319,71 @@ function buildCanvasDoc(plan, brief) {
         refs: anchorRefs,
       },
     });
+    if (useKeyframes) {
+      anchorRefs.forEach((url, idx) => {
+        const imgNodeId = uid('n_');
+        refImageNodeIds.push(imgNodeId);
+        nodes.push({
+          id: imgNodeId,
+          type: 'image',
+          position: { x: 40, y: 280 + idx * 170 },
+          data: { label: `人物参考 #${idx + 1}`, url },
+        });
+      });
+    }
+  }
+
+  const keyframeIds = [];
+  if (useKeyframes) {
+    plan.shots.forEach((shot, i) => {
+      const kfId = uid('n_');
+      keyframeIds.push(kfId);
+      const kfPrompt = [
+        anchorRefs.length
+          ? '严格保持参考图人物的五官脸型、发型与穿搭造型一致，生成本镜头的高清实拍起始首帧定格画面。'
+          : (plan.character?.description ? `人物外观：${plan.character.description}。` : ''),
+        shot.keyframePrompt || shot.prompt,
+        styleSuffix,
+      ].filter(Boolean).join('\n');
+
+      nodes.push({
+        id: kfId,
+        type: 'geminiImage',
+        position: { x: 340 + (i % 3) * 320, y: 40 + Math.floor(i / 3) * 460 },
+        data: {
+          label: `首帧 · ${shot.label}`,
+          prompt: kfPrompt,
+          size,
+          resolution: '1K',
+          provider: kfProvider,
+        },
+      });
+
+      for (const refNodeId of refImageNodeIds) {
+        edges.push({
+          id: uid('e_'),
+          source: refNodeId,
+          sourceHandle: 'image',
+          target: kfId,
+          targetHandle: 'ref',
+        });
+      }
+    });
   }
 
   const videoIds = plan.shots.map((shot, i) => {
     const id = uid('n_');
+    const yBase = useKeyframes
+      ? 250 + Math.floor(i / 3) * 460
+      : 60 + Math.floor(i / 3) * 260;
     nodes.push({
       id,
       type: 'video',
-      position: { x: 320 + (i % 3) * 300, y: 60 + Math.floor(i / 3) * 260 },
+      position: { x: 340 + (i % 3) * 320, y: yBase },
       data: {
         label: shot.label,
         prompt: shot.prompt,
+        subtitle: brief.subtitlesEnabled ? (shot.narration || '') : '',
         duration: shot.duration,
         size,
         qualityControl: true,
@@ -285,18 +391,40 @@ function buildCanvasDoc(plan, brief) {
         qualityMaxRetries: 1,
         identityCheck: anchorRefs.length > 0,
         aiProvider: brief.provider || null,
+        styleId: brief.styleId || '',
+        shotId: brief.shotId || '',
+        keyframePriority: useKeyframes,
       },
     });
     return id;
   });
 
   const storyboardId = uid('n_');
+  const rowsCount = Math.ceil(plan.shots.length / 3);
   nodes.push({
     id: storyboardId,
     type: 'storyboard',
-    position: { x: 320, y: 60 + Math.ceil(plan.shots.length / 3) * 260 },
-    data: { label: '成片' },
+    position: { x: 340, y: 80 + rowsCount * (useKeyframes ? 460 : 260) },
+    data: {
+      label: '成片合成',
+      outputSize: size,
+      bgmUrl: brief.bgmUrl || '',
+      bgmVolume: Number.isFinite(Number(brief.bgmVolume)) ? Number(brief.bgmVolume) : 0.22,
+      burnSubtitles: Boolean(brief.subtitlesEnabled || brief.voiceoverEnabled),
+    },
   });
+
+  if (useKeyframes) {
+    plan.shots.forEach((_, i) => {
+      edges.push({
+        id: uid('e_'),
+        source: keyframeIds[i],
+        sourceHandle: 'image',
+        target: videoIds[i],
+        targetHandle: 'ref',
+      });
+    });
+  }
 
   if (characterId) {
     plan.shots.forEach((shot, i) => {
@@ -312,7 +440,7 @@ function buildCanvasDoc(plan, brief) {
   }
 
   plan.shots.forEach((shot, i) => {
-    if (shot.continuation && i > 0) {
+    if (!useKeyframes && shot.continuation && i > 0) {
       edges.push({
         id: uid('e_'),
         source: videoIds[i - 1],
@@ -327,7 +455,12 @@ function buildCanvasDoc(plan, brief) {
       sourceHandle: 'video',
       target: storyboardId,
       targetHandle: 'clip',
-      data: { order: i },
+      data: {
+        order: i,
+        transition: brief.transition === 'fade' ? 'fade' : 'cut',
+        transitionDuration: 0.35,
+        subtitle: shot.narration || '',
+      },
     });
   });
 
@@ -336,7 +469,7 @@ function buildCanvasDoc(plan, brief) {
       version: 3,
       nodes,
       edges,
-      viewport: { x: 0, y: 0, zoom: 0.8 },
+      viewport: { x: 0, y: 0, zoom: 0.78 },
     },
     storyboardId,
   };
@@ -344,15 +477,50 @@ function buildCanvasDoc(plan, brief) {
 
 /* ----------------------------- Orchestration ----------------------------- */
 
+function buildShotRuntime(row, plan) {
+  if (!row?.run_id || !row?.canvas_id) return [];
+  const canvasRow = db.prepare('SELECT doc_json FROM canvases WHERE id = ?').get(row.canvas_id);
+  if (!canvasRow) return [];
+  const doc = parseJson(canvasRow.doc_json, { nodes: [] });
+  const nodeRuns = db.prepare('SELECT * FROM node_runs WHERE run_id = ? ORDER BY created_at').all(row.run_id);
+  const byNodeId = new Map(nodeRuns.map((nr) => [nr.node_id, nr]));
+  const videoNodes = (doc.nodes || []).filter((n) => n.type === 'video');
+  const kfNodes = (doc.nodes || []).filter((n) => n.type === 'geminiImage');
+
+  return videoNodes.map((vNode, idx) => {
+    const nr = byNodeId.get(vNode.id);
+    const job = nr?.job_id ? db.prepare('SELECT progress, media_file, error, status FROM jobs WHERE id = ?').get(nr.job_id) : null;
+    const out = parseJson(nr?.output_json, {});
+    const kfNode = kfNodes[idx];
+    const kfRun = kfNode ? byNodeId.get(kfNode.id) : null;
+    const kfOut = parseJson(kfRun?.output_json, {});
+    return {
+      index: idx + 1,
+      nodeId: vNode.id,
+      label: vNode.data?.label || plan?.shots?.[idx]?.label || `镜头 ${idx + 1}`,
+      narration: plan?.shots?.[idx]?.narration || vNode.data?.subtitle || '',
+      status: nr?.status || 'queued',
+      progress: job?.progress || (nr?.status === 'completed' ? 100 : 0),
+      keyframeStatus: kfRun?.status || null,
+      keyframeUrl: kfOut?.mediaUrl || null,
+      mediaUrl: out?.mediaUrl || (job?.media_file ? `/media/${job.media_file}` : null),
+      qualityScore: out?.quality?.score ?? null,
+      error: nr?.error || job?.error || null,
+    };
+  });
+}
+
 function shapeProduction(row) {
   if (!row) return null;
+  const plan = parseJson(row.plan_json, null);
   return {
     id: row.id,
     batchId: row.batch_id || null,
     status: row.status,
     stage: row.stage,
     brief: parseJson(row.brief_json, {}),
-    plan: parseJson(row.plan_json, null),
+    plan,
+    shotStates: buildShotRuntime(row, plan),
     canvasId: row.canvas_id,
     runId: row.run_id,
     error: row.error,
@@ -370,19 +538,6 @@ function patchProduction(id, patch) {
     .run(...fields.map((f) => patch[f]), now(), id);
 }
 
-async function internalPost(pathname, userId, body) {
-  const token = signToken({ id: userId, role: 'admin' });
-  const res = await fetch(`http://127.0.0.1:${CFG.port}${pathname}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify(body || {}),
-  });
-  const text = await res.text();
-  const data = parseJson(text, { error: text.slice(0, 300) });
-  if (!res.ok) throw fail(data?.error || `内部请求失败 HTTP ${res.status}`, res.status);
-  return data;
-}
-
 export async function planProduction(brief) {
   if (!String(brief.direction || '').trim()) throw fail('请填写创作方向');
   let plan;
@@ -397,24 +552,38 @@ export async function planProduction(brief) {
   return { plan, doc, storyboardId };
 }
 
-/** 真正开始一条生产：规划 → 建画布 → 提交运行 */
+/** 真正开始一条生产：支持复用用户已确认的分镜 plan，无需二次盲调 LLM */
 export async function beginProduction(id) {
   const row = db.prepare('SELECT * FROM productions WHERE id = ?').get(id);
   if (!row) throw fail('生产任务不存在', 404);
   const brief = parseJson(row.brief_json, {});
-  patchProduction(id, { status: 'planning', stage: '规划分镜' });
+  const preplanned = parseJson(row.plan_json, null);
+
+  patchProduction(id, { status: 'planning', stage: preplanned ? '校验分镜' : '规划分镜' });
   try {
-    const { plan, doc } = await planProduction(brief);
-    patchProduction(id, { plan_json: JSON.stringify(plan), status: 'running', stage: '排队生成' });
+    let plan;
+    let doc;
+    if (preplanned && Array.isArray(preplanned.shots) && preplanned.shots.length) {
+      plan = validatePlan(preplanned, brief);
+      doc = buildCanvasDoc(plan, brief).doc;
+    } else {
+      const planned = await planProduction(brief);
+      plan = planned.plan;
+      doc = planned.doc;
+    }
+
+    patchProduction(id, { plan_json: JSON.stringify(plan), status: 'running', stage: '提交工作流' });
 
     const canvasId = uid('cv_');
     db.prepare(
       'INSERT INTO canvases(id, user_id, name, doc_json, rev, created_at, updated_at) VALUES(?,?,?,?,?,?,?)',
     ).run(canvasId, row.user_id, `自动导演 · ${plan.title}`, JSON.stringify(doc), 1, now(), now());
 
-    const out = await internalPost(`/api/canvases/${canvasId}/runs`, row.user_id, {});
+    const run = await startCanvasRunForUser(canvasId, row.user_id, {});
     patchProduction(id, {
-      canvas_id: canvasId, run_id: out?.run?.id || null, stage: '生成中',
+      canvas_id: canvasId,
+      run_id: run?.id || null,
+      stage: plan.pipelineMode === 'keyframe' ? '并行生成首帧与视频' : '生成分镜视频中',
     });
   } catch (error) {
     patchProduction(id, {
@@ -428,19 +597,27 @@ export async function beginProduction(id) {
   return shapeProduction(db.prepare('SELECT * FROM productions WHERE id = ?').get(id));
 }
 
-/** 单条生产：立即开始（保留原有行为） */
-export async function createProduction(userId, brief) {
+/** 单条生产：若前端传入已确认/编辑的 plan，原样锁死投产 */
+export async function createProduction(userId, brief, customPlan = null) {
   const id = uid('pr_');
   const ts = now();
+  const validatedCustom = customPlan && Array.isArray(customPlan.shots) && customPlan.shots.length
+    ? validatePlan(customPlan, brief)
+    : null;
   db.prepare(
-    `INSERT INTO productions(id, user_id, brief_json, status, stage, created_at, updated_at)
-     VALUES(?,?,?,?,?,?,?)`,
-  ).run(id, userId, JSON.stringify(brief), 'planning', '规划分镜', ts, ts);
-  try {
-    await beginProduction(id);
-  } catch (error) {
-    throw error;
-  }
+    `INSERT INTO productions(id, user_id, brief_json, plan_json, status, stage, created_at, updated_at)
+     VALUES(?,?,?,?,?,?,?,?)`,
+  ).run(
+    id,
+    userId,
+    JSON.stringify(brief),
+    validatedCustom ? JSON.stringify(validatedCustom) : null,
+    'planning',
+    validatedCustom ? '按确认分镜启动' : '规划分镜',
+    ts,
+    ts,
+  );
+  await beginProduction(id);
   return shapeProduction(db.prepare('SELECT * FROM productions WHERE id = ?').get(id));
 }
 
@@ -466,7 +643,7 @@ export function enqueueBatch(userId, briefs, { name = '' } = {}) {
     name: String(name || '').slice(0, 60) || `批量 · ${ids.length} 条`,
     count: ids.length,
     productions: db.prepare(
-      `SELECT * FROM productions WHERE batch_id = ? ORDER BY created_at`,
+      'SELECT * FROM productions WHERE batch_id = ? ORDER BY created_at',
     ).all(batchId).map(shapeProduction),
   };
 }
@@ -475,7 +652,6 @@ function directorConcurrency() {
   return Math.max(1, Math.min(3, Number(getSetting('directorConcurrency')) || 1));
 }
 
-/** 调度：先按并发上限启动排队任务，再推进进行中的任务 */
 export async function tickDirector() {
   const limit = directorConcurrency();
   const active = db.prepare(
@@ -519,33 +695,80 @@ export async function advanceProduction(id) {
   if (!row.run_id) return shapeProduction(row);
 
   running.add(id);
+  const ttsDir = path.join(CFG.dataDir, 'tmp', `tts-${id}`);
   try {
     const run = db.prepare('SELECT * FROM canvas_runs WHERE id = ?').get(row.run_id);
     if (!run) return shapeProduction(row);
 
-    if (run.status === 'failed' && row.status !== 'assembling') {
-      patchProduction(id, { status: 'failed', stage: '生成失败', error: run.error || '画布执行失败', finished_at: now() });
+    if (['failed', 'completed_with_errors'].includes(run.status) && row.status !== 'assembling') {
+      const failedNode = db.prepare("SELECT error FROM node_runs WHERE run_id = ? AND status = 'failed' LIMIT 1").get(row.run_id);
+      patchProduction(id, {
+        status: 'failed',
+        stage: run.status === 'completed_with_errors' ? '部分镜头失败' : '生成失败',
+        error: failedNode?.error || run.error || '画布执行存在失败节点，可点击“仅重跑失败镜头”继续',
+        finished_at: now(),
+      });
     } else if (run.status === 'completed') {
-      if (row.status !== 'assembling') {
-        patchProduction(id, { status: 'assembling', stage: '合成成片' });
-        return shapeProduction(db.prepare('SELECT * FROM productions WHERE id = ?').get(id));
-      }
       const plan = parseJson(row.plan_json, {});
+      const brief = parseJson(row.brief_json, {});
+      patchProduction(id, {
+        status: 'assembling',
+        stage: brief.voiceoverEnabled ? '合成旁白配音与字幕成片' : '合成成片中',
+      });
+
       const storyboardId = findStoryboardId(row.canvas_id);
       if (!storyboardId) throw fail('画布中找不到分镜板节点', 500);
-      const exported = await internalPost(
-        `/api/canvases/${row.canvas_id}/storyboards/${storyboardId}/export`, row.user_id, {},
-      );
+
+      const narrationFilesByOrder = {};
+      const subtitlesByOrder = {};
+      const shots = Array.isArray(plan.shots) ? plan.shots : [];
+      let voicedCount = 0;
+
+      if (brief.voiceoverEnabled || brief.subtitlesEnabled) {
+        fs.mkdirSync(ttsDir, { recursive: true });
+        for (let i = 0; i < shots.length; i += 1) {
+          const line = String(shots[i]?.narration || '').trim();
+          if (!line) continue;
+          if (brief.subtitlesEnabled || brief.voiceoverEnabled) {
+            subtitlesByOrder[i] = line;
+          }
+          if (brief.voiceoverEnabled) {
+            try {
+              const mp3Path = path.join(ttsDir, `shot-${i}.mp3`);
+              const ttsOut = await synthesizeNarrationToFile(line, mp3Path, { voiceId: brief.voiceId || 'xiaoxiao' });
+              if (ttsOut?.file) {
+                narrationFilesByOrder[i] = ttsOut.file;
+                voicedCount += 1;
+              }
+            } catch (ttsErr) {
+              console.warn(`[director] 镜头 ${i + 1} 配音合成跳过:`, ttsErr.message);
+            }
+          }
+        }
+      }
+
+      const exported = await exportStoryboardForUser(row.canvas_id, storyboardId, row.user_id, {
+        outputSize: brief.size || 'source',
+        defaultTransition: brief.transition === 'fade' ? 'fade' : 'cut',
+        narrationFilesByOrder,
+        subtitlesByOrder,
+        burnSubtitles: Boolean(brief.subtitlesEnabled || brief.voiceoverEnabled),
+        duckBgm: true,
+      });
       const quality = summarizeQuality(row.run_id);
       patchProduction(id, {
         status: 'completed',
         stage: '完成',
         output_json: JSON.stringify({
-          url: exported?.export?.url,
-          filename: exported?.export?.filename,
-          bytes: exported?.export?.bytes,
-          totalSeconds: plan.totalSeconds || null,
-          shotCount: plan.shots?.length || 0,
+          url: exported?.url,
+          filename: exported?.filename,
+          bytes: exported?.bytes,
+          duration: exported?.duration || plan.totalSeconds || null,
+          totalSeconds: Math.round(exported?.duration || plan.totalSeconds || 0),
+          shotCount: shots.length,
+          voicedCount,
+          subtitled: Object.keys(subtitlesByOrder).length > 0,
+          pipelineMode: plan.pipelineMode || 'standard',
           quality,
         }),
         finished_at: now(),
@@ -558,6 +781,7 @@ export async function advanceProduction(id) {
     });
     return shapeProduction(db.prepare('SELECT * FROM productions WHERE id = ?').get(id));
   } finally {
+    try { fs.rmSync(ttsDir, { recursive: true, force: true }); } catch { /* ignore */ }
     running.delete(id);
   }
 }
@@ -588,7 +812,7 @@ function findStoryboardId(canvasId) {
   return (doc.nodes || []).find((node) => node.type === 'storyboard')?.id || null;
 }
 
-export function listProductions(userId, limit = 20) {
+export function listProductions(userId, limit = 24) {
   return db.prepare('SELECT * FROM productions WHERE user_id = ? ORDER BY created_at DESC LIMIT ?')
     .all(userId, limit)
     .map(shapeProduction);
@@ -622,13 +846,47 @@ export function getProduction(userId, id) {
   return shapeProduction(row);
 }
 
-export async function retryProduction(userId, id) {
+export function cancelProduction(userId, id) {
+  const row = db.prepare('SELECT * FROM productions WHERE id = ? AND user_id = ?').get(id, userId);
+  if (!row) throw fail('生产任务不存在', 404);
+  if (row.run_id) {
+    try { cancelCanvasRunForUser(row.run_id, userId); } catch { /* ignore */ }
+  }
+  patchProduction(id, {
+    status: 'failed',
+    stage: '已取消',
+    error: '用户手动取消生产，未完成节点积分已退还',
+    finished_at: now(),
+  });
+  return shapeProduction(db.prepare('SELECT * FROM productions WHERE id = ?').get(id));
+}
+
+export async function retryProduction(userId, id, { failedOnly = false } = {}) {
   const row = db.prepare('SELECT * FROM productions WHERE id = ? AND user_id = ?').get(id, userId);
   if (!row) throw fail('生产任务不存在', 404);
   if (ACTIVE.has(row.status) || row.status === 'queued') throw fail('任务仍在进行中', 409);
+
+  if (failedOnly && row.canvas_id) {
+    const newRun = await retryFailedCanvasNodesForUser(row.canvas_id, userId);
+    patchProduction(id, {
+      status: 'running',
+      stage: '重跑失败镜头中',
+      error: null,
+      run_id: newRun.id,
+      finished_at: null,
+    });
+    return shapeProduction(db.prepare('SELECT * FROM productions WHERE id = ?').get(id));
+  }
+
+  // 保留已确认的 plan_json，避免整条重排时丢失用户微调过的分镜
   patchProduction(id, {
-    status: 'queued', stage: '排队中', error: null, output_json: null,
-    canvas_id: null, run_id: null, finished_at: null,
+    status: 'queued',
+    stage: '排队中',
+    error: null,
+    output_json: null,
+    canvas_id: null,
+    run_id: null,
+    finished_at: null,
   });
   return shapeProduction(db.prepare('SELECT * FROM productions WHERE id = ?').get(id));
 }
@@ -644,12 +902,15 @@ export function startDirectorScheduler() {
       console.error('[director] 调度异常:', error.message);
     }
   };
-  schedulerTimer = setInterval(tick, 5000);
+  schedulerTimer = setInterval(tick, 3000);
   schedulerTimer.unref?.();
   return schedulerTimer;
 }
 
-/** 可用的提示词 AI（供前端下拉选择） */
+export function listVoices() {
+  return VOICE_PRESETS;
+}
+
 export function listProviders() {
   const labels = { chatgpt2api: 'ChatGPT2API', antigravity: 'Antigravity', gemini: 'Gemini 官方' };
   const out = [];

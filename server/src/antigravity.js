@@ -25,7 +25,10 @@ export function normalizeBaseUrl(value) {
   if (!['http:', 'https:'].includes(url.protocol)) {
     throw Object.assign(new Error('Antigravity 服务地址只支持 HTTP 或 HTTPS'), { status: 400 });
   }
-  url.pathname = url.pathname.replace(/\/+$/, '').replace(/\/v1$/i, '') || '/';
+  url.pathname = url.pathname
+    .replace(/\/+$/, '')
+    .replace(/\/v1(?:\/.*)?$/i, '')
+    .replace(/\/(?:chat\/completions|images\/generations|images\/edits|models)$/i, '') || '/';
   url.search = '';
   url.hash = '';
   return url.toString().replace(/\/+$/, '');
@@ -104,19 +107,33 @@ function contentText(content) {
   return content.map((part) => typeof part === 'string' ? part : part?.text || '').filter(Boolean).join('\n').trim();
 }
 
-export async function generateText({ messages, model, temperature = 0.75, maxOutputTokens = 8192 }) {
+export async function generateText({ messages, model, temperature = 0.75, maxOutputTokens = 8192, jsonMode = false }) {
   const selected = model || getSetting('antigravityTextModel') || FALLBACK_TEXT_MODELS[0].id;
   const clean = (messages || []).filter((item) => item && ['system', 'user', 'assistant'].includes(item.role))
     .map((item) => ({ role: item.role, content: String(item.content || '').slice(0, 30000) }))
     .filter((item) => item.content);
   if (!clean.length) throw new Error('Antigravity 文本请求缺少用户内容');
-  const data = await request('/chat/completions', {
-    method: 'POST',
-    body: JSON.stringify({
-      model: selected, messages: clean, temperature,
-      max_tokens: maxOutputTokens, stream: false,
-    }),
-  });
+  const baseBody = {
+    model: selected, messages: clean, temperature,
+    max_tokens: maxOutputTokens, stream: false,
+  };
+  let data;
+  if (jsonMode) {
+    try {
+      data = await request('/chat/completions', {
+        method: 'POST',
+        body: JSON.stringify({ ...baseBody, response_format: { type: 'json_object' } }),
+      });
+    } catch (err) {
+      if (err?.status === 400 || err?.status === 422) {
+        data = await request('/chat/completions', { method: 'POST', body: JSON.stringify(baseBody) });
+      } else {
+        throw err;
+      }
+    }
+  } else {
+    data = await request('/chat/completions', { method: 'POST', body: JSON.stringify(baseBody) });
+  }
   const content = contentText(data?.choices?.[0]?.message?.content);
   if (!content) throw new Error('Antigravity 未返回文本内容');
   return { content, model: data?.model || selected, usage: data?.usage || null };

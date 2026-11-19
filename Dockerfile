@@ -12,7 +12,8 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg fonts-wqy-zenhei fontconfig \
+    && fc-cache -fv >/dev/null 2>&1 || true \
     && rm -rf /var/lib/apt/lists/*
 
 COPY server/package.json server/package-lock.json ./server/
