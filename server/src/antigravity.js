@@ -190,10 +190,11 @@ export async function analyzeImages({ prompt, images = [], model }) {
 }
 
 function sizePixels(size) {
-  return ({
-    '1:1': '1024x1024', '16:9': '1920x1080', '9:16': '1080x1920',
-    '4:3': '1600x1200', '3:4': '1200x1600',
-  })[size] || '1024x1024';
+  const value = String(size || '').trim();
+  // 上游 chatgpt2api 原生支持比例字符串与显式像素，不再压缩成三档
+  if (/^\d{2,4}x\d{2,4}$/i.test(value)) return value;
+  if (/^\d{1,2}:\d{1,2}$/.test(value)) return value;
+  return '1:1';
 }
 
 function qualityOf(resolution) {

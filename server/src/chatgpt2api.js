@@ -202,9 +202,11 @@ export async function analyzeImages({ prompt, images = [], model }) {
 }
 
 function sizePixels(size) {
-  if (['9:16', '3:4'].includes(size)) return '1024x1536';
-  if (['16:9', '4:3'].includes(size)) return '1536x1024';
-  return '1024x1024';
+  const value = String(size || '').trim();
+  // 上游 chatgpt2api 原生支持比例字符串与显式像素，不再压缩成三档
+  if (/^\d{2,4}x\d{2,4}$/i.test(value)) return value;
+  if (/^\d{1,2}:\d{1,2}$/.test(value)) return value;
+  return '1:1';
 }
 
 function qualityOf(resolution) {
